@@ -1,0 +1,80 @@
+{
+  "name": "vscode-deepseek",
+  "displayName": "DeepSeek for Copilot",
+  "description": "Use DeepSeek models (deepseek-chat, deepseek-reasoner) in VSCode Copilot Chat",
+  "version": "0.1.0",
+  "type": "module",
+  "publisher": "DenizhanDaklr",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zelosleone/DeepSeek-for-Copilot"
+  },
+  "icon": "images/Deepseek-Logo-Icon-PNG.png",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.108.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "deepseek",
+    "copilot",
+    "ai",
+    "chat",
+    "language model"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "deepseek",
+        "displayName": "DeepSeek"
+      }
+    ],
+    "commands": [
+      {
+        "command": "deepseek.setApiKey",
+        "title": "DeepSeek: Set API Key"
+      }
+    ],
+    "configuration": {
+      "title": "DeepSeek",
+      "properties": {
+        "deepseek.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "DeepSeek API key (fallback if not set via command). Use 'DeepSeek: Set API Key' command for secure storage.",
+          "scope": "application"
+        },
+        "deepseek.baseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com",
+          "description": "DeepSeek API base URL",
+          "scope": "application"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src",
+    "format": "biome format --write src/",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.11",
+    "@types/node": "20.19.30",
+    "@types/vscode": "1.108.1",
+    "@typescript-eslint/eslint-plugin": "8.53.0",
+    "@typescript-eslint/parser": "8.53.0",
+    "@vscode/vsce": "3.7.1",
+    "eslint": "9.39.2",
+    "globals": "17.0.0",
+    "typescript": "5.9.3"
+  }
+}
