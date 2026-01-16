@@ -1,5 +1,5 @@
 {
-  "name": "vscode-deepseek",
+  "name": "copilot-vscode-deepseek",
   "displayName": "DeepSeek for Copilot",
   "description": "Use DeepSeek models (deepseek-chat, deepseek-reasoner) in VSCode Copilot Chat",
   "version": "0.1.0",
