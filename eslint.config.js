@@ -30,7 +30,7 @@ export default [
       'no-console': 'warn',
       'semi': ['error', 'always'],
       'quotes': ['error', 'single', { avoidEscape: true }],
-      'indent': ['error', 2],
+      'indent': ['error', 2, { SwitchCase: 1 }],
       'comma-dangle': ['error', 'always-multiline'],
     }
   }

@@ -30,6 +30,10 @@ export interface DeepSeekRequest {
   model: string;
   messages: DeepSeekMessage[];
   stream?: boolean;
+  thinking?: {
+    type: 'enabled' | 'disabled';
+  };
+  reasoning_effort?: 'high' | 'max';
   temperature?: number;
   top_p?: number;
   max_tokens?: number;

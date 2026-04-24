@@ -1,6 +1,6 @@
 # DeepSeek for Copilot
 
-Use DeepSeek models directly in VS Code's Copilot Chat.
+Use DeepSeek V4 models directly in VS Code's Copilot Chat.
 
 ## But How!?
 
@@ -13,16 +13,27 @@ Use DeepSeek models directly in VS Code's Copilot Chat.
 
 Open Copilot Chat and pick a DeepSeek model from the model selector:
 
-- **DeepSeek Chat** — Fast, general-purpose model with tool support
-- **DeepSeek Reasoner** — Thinking model for complex problems
+- **DeepSeek V4 Flash**
+- **DeepSeek V4 Flash Thinking**
+- **DeepSeek V4 Pro**
+- **DeepSeek V4 Pro Thinking**
 
 That's it. Chat away.
 
 ## Requirements
 
-- VS Code 1.104 or later
+- VS Code 1.108 or later
 - GitHub Copilot subscription
 - DeepSeek API key
+
+## DeepSeek API Notes
+
+This extension uses the current DeepSeek V4 API model IDs:
+
+- `deepseek-v4-flash`
+- `deepseek-v4-pro`
+
+The older `deepseek-chat` and `deepseek-reasoner` aliases are deprecated by DeepSeek and scheduled to stop working on 2026-07-24.
 
 ## Settings
 

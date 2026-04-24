@@ -1,8 +1,8 @@
 {
   "name": "copilot-vscode-deepseek",
   "displayName": "DeepSeek for Copilot",
-  "description": "Use DeepSeek models (deepseek-chat, deepseek-reasoner) in VSCode Copilot Chat",
-  "version": "0.1.0",
+  "description": "Use DeepSeek V4 models in VS Code Copilot Chat",
+  "version": "0.2.2",
   "type": "module",
   "publisher": "DenizhanDaklr",
   "repository": {
@@ -31,7 +31,8 @@
     "languageModelChatProviders": [
       {
         "vendor": "deepseek",
-        "displayName": "DeepSeek"
+        "displayName": "DeepSeek",
+        "managementCommand": "deepseek.setApiKey"
       }
     ],
     "commands": [
