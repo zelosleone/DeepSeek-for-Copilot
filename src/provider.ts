@@ -99,6 +99,81 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     await this.authManager.promptForApiKey();
   }
 
+  async configureReasoningEffort(): Promise<void> {
+    const options = ['high', 'max'] as const;
+    const current = vscode.workspace.getConfiguration('deepseek').get<string>('reasoningEffort', 'high');
+
+    const selection = await vscode.window.showQuickPick(
+      options.map((o) => ({
+        label: o === 'high' ? 'High (default)' : 'Max (complex tasks)',
+        description: o === current ? 'Current' : undefined,
+        value: o,
+      })),
+      {
+        placeHolder: 'Select reasoning effort level for thinking models',
+      },
+    );
+
+    if (selection) {
+      await vscode.workspace.getConfiguration('deepseek').update('reasoningEffort', selection.value, true);
+      vscode.window.showInformationMessage(`DeepSeek reasoning effort set to "${selection.value}"`);
+    }
+  }
+
+  async configureTemperature(): Promise<void> {
+    const presets = [
+      { label: '0.0', description: 'Coding / Math (deterministic)' },
+      { label: '1.0', description: 'Data Cleaning / Analysis (default)' },
+      { label: '1.3', description: 'General Conversation / Translation' },
+      { label: '1.5', description: 'Creative Writing / Poetry' },
+      { label: 'Custom', description: 'Enter your own value (0.0 - 2.0)' },
+    ];
+
+    const current = vscode.workspace.getConfiguration('deepseek').get<number>('temperature', 1.0);
+    const currentLabel = String(current);
+    const currentIndex = presets.findIndex((p) => p.label === currentLabel);
+
+    const selection = await vscode.window.showQuickPick(
+      presets.map((p, i) => ({
+        ...p,
+        description: i === currentIndex ? 'Current' : p.description,
+      })),
+      {
+        placeHolder: 'Select temperature for DeepSeek models',
+      },
+    );
+
+    if (!selection) {
+      return;
+    }
+
+    let value: number;
+
+    if (selection.label === 'Custom') {
+      const input = await vscode.window.showInputBox({
+        prompt: 'Enter temperature value (0.0 - 2.0)',
+        validateInput: (text) => {
+          const num = parseFloat(text);
+          if (Number.isNaN(num) || num < 0 || num > 2) {
+            return 'Value must be a number between 0.0 and 2.0';
+          }
+          return undefined;
+        },
+      });
+
+      if (!input) {
+        return;
+      }
+
+      value = parseFloat(input);
+    } else {
+      value = parseFloat(selection.label);
+    }
+
+    await vscode.workspace.getConfiguration('deepseek').update('temperature', value, true);
+    vscode.window.showInformationMessage(`DeepSeek temperature set to ${value}`);
+  }
+
   async provideLanguageModelChatInformation(
     _options: vscode.PrepareLanguageModelChatModelOptions,
     _token: vscode.CancellationToken,
@@ -147,6 +222,8 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     const tools = modelDef.capabilities.toolCalling ? this.convertTools(options.tools) : undefined;
     const toolChoice = this.convertToolChoice(options.toolMode, tools);
 
+    const temperature = vscode.workspace.getConfiguration('deepseek').get<number>('temperature', 1.0);
+
     let currentReasoningContent = '';
 
     return new Promise((resolve, reject) => {
@@ -156,6 +233,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
           messages: deepseekMessages,
           thinking: { type: behavior.thinking },
           reasoning_effort: behavior.reasoningEffort,
+          temperature,
           tools,
           tool_choice: toolChoice,
         },
@@ -203,14 +281,14 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
       return Math.max(1, Math.ceil(text.length / 4));
     }
 
-    let content = '';
+    let length = 0;
     for (const part of text.content) {
       if (part instanceof vscode.LanguageModelTextPart) {
-        content += part.value;
+        length += part.value.length;
       }
     }
 
-    return Math.max(1, Math.ceil(content.length / 4));
+    return Math.max(1, Math.ceil(length / 4));
   }
 
   private resolveModelBehavior(
@@ -276,6 +354,14 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private getReasoningEffort(
     modelOptions: Record<string, unknown> | undefined,
   ): ReasoningEffort | undefined {
+    const configValue = vscode.workspace.getConfiguration('deepseek').get<string>('reasoningEffort');
+    if (configValue) {
+      const normalized = this.normalizeReasoningEffort(configValue);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
     if (!modelOptions) {
       return undefined;
     }
@@ -287,12 +373,13 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
       return undefined;
     }
 
-    switch (rawEffort.toLowerCase()) {
-      case 'low':
-      case 'medium':
+    return this.normalizeReasoningEffort(rawEffort);
+  }
+
+  private normalizeReasoningEffort(value: string): ReasoningEffort | undefined {
+    switch (value.toLowerCase()) {
       case 'high':
         return 'high';
-      case 'xhigh':
       case 'max':
         return 'max';
       default:
@@ -309,7 +396,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     for (const message of messages) {
       const role = this.mapRole(message.role);
 
-      let content = '';
+      const contentParts: string[] = [];
       const toolCalls: Array<{
         id: string;
         type: 'function';
@@ -319,7 +406,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
       for (const part of message.content) {
         if (part instanceof vscode.LanguageModelTextPart) {
-          content += part.value;
+          contentParts.push(part.value);
         } else if (part instanceof vscode.LanguageModelToolCallPart) {
           toolCalls.push({
             id: part.callId,
@@ -330,18 +417,21 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
             },
           });
         } else if (part instanceof vscode.LanguageModelToolResultPart) {
-          let toolContent = '';
+          const toolContentParts: string[] = [];
           for (const item of part.content) {
             if (item instanceof vscode.LanguageModelTextPart) {
-              toolContent += item.value;
+              toolContentParts.push(item.value);
             }
           }
+          const toolContent = toolContentParts.join('');
           toolResults.push({
             callId: part.callId,
             content: toolContent || JSON.stringify(part.content),
           });
         }
       }
+
+      const content = contentParts.join('');
 
       if (role === 'assistant') {
         let reasoningContent: string | undefined;

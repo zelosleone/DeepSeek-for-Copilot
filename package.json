@@ -2,7 +2,7 @@
   "name": "copilot-vscode-deepseek",
   "displayName": "DeepSeek for Copilot",
   "description": "Use DeepSeek V4 models in VS Code Copilot Chat",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "publisher": "DenizhanDaklr",
   "repository": {
@@ -39,6 +39,14 @@
       {
         "command": "deepseek.setApiKey",
         "title": "DeepSeek: Set API Key"
+      },
+      {
+        "command": "deepseek.setReasoningEffort",
+        "title": "DeepSeek: Set Reasoning Effort"
+      },
+      {
+        "command": "deepseek.setTemperature",
+        "title": "DeepSeek: Set Temperature"
       }
     ],
     "configuration": {
@@ -48,6 +56,24 @@
           "type": "string",
           "default": "",
           "description": "DeepSeek API key (fallback if not set via command). Use 'DeepSeek: Set API Key' command for secure storage.",
+          "scope": "application"
+        },
+        "deepseek.reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "high",
+            "max"
+          ],
+          "default": "high",
+          "description": "Reasoning effort level for DeepSeek thinking models",
+          "scope": "application"
+        },
+        "deepseek.temperature": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Temperature for DeepSeek models (0.0 = deterministic, 2.0 = creative)",
           "scope": "application"
         },
         "deepseek.baseUrl": {
@@ -73,7 +99,7 @@
     "@types/vscode": "1.108.1",
     "@typescript-eslint/eslint-plugin": "8.53.0",
     "@typescript-eslint/parser": "8.53.0",
-    "@vscode/vsce": "3.7.1",
+    "@vscode/vsce": "^2.25.0",
     "eslint": "9.39.2",
     "globals": "17.0.0",
     "typescript": "5.9.3"

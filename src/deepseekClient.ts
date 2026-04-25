@@ -129,26 +129,11 @@ export class DeepSeekClient {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      const MAX_BUFFER_SIZE = 1_000_000;
 
       const pendingToolCalls = new Map<number, DeepSeekToolCall>();
 
-      while (true) {
-        if (cancellationToken?.isCancellationRequested) {
-          controller.abort();
-          break;
-        }
-
-        const { done, value } = await reader.read();
-
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
+      const processLines = (lines: string[]): void => {
         for (const line of lines) {
           const trimmed = line.trim();
 
@@ -220,9 +205,40 @@ export class DeepSeekClient {
             }
           }
         }
+      };
+
+      while (true) {
+        if (cancellationToken?.isCancellationRequested) {
+          controller.abort();
+          break;
+        }
+
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        if (buffer.length > MAX_BUFFER_SIZE && !buffer.includes('\n')) {
+          throw new Error(
+            `Streaming buffer exceeded maximum size (${MAX_BUFFER_SIZE} bytes). Possible malformed stream.`,
+          );
+        }
+
+        processLines(lines);
       }
 
-      callbacks.onDone();
+      buffer += decoder.decode();
+
+      if (buffer) {
+        const lines = buffer.split('\n');
+        processLines(lines);
+      }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         callbacks.onDone();

@@ -46,6 +46,15 @@ jobs:
       - name: Package extension (.vsix)
         run: npx -y vsce package -o "${{ steps.vsix-info.outputs.name }}"
 
+      - name: Check if release tag exists
+        id: check_tag
+        run: |
+          if git ls-remote --tags origin "refs/tags/v${{ steps.vsix-info.outputs.version }}" | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
@@ -54,6 +63,7 @@ jobs:
 
       - name: Create GitHub Release
         id: create_release
+        if: steps.check_tag.outputs.exists == 'false'
         uses: actions/create-release@v1
         with:
           tag_name: v${{ steps.vsix-info.outputs.version }}
@@ -65,6 +75,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload VSIX to Release
+        if: steps.check_tag.outputs.exists == 'false'
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
