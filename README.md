@@ -26,6 +26,10 @@ That's it. Chat away.
 - GitHub Copilot subscription
 - DeepSeek API key
 
+## Remote Development
+
+This extension runs on your local machine and works with Remote-SSH, Remote-WSL, and other VS Code remote setups. Network requests to the DeepSeek API are sent from the local client, so the remote host does not need outbound internet access.
+
 ## DeepSeek API Notes
 
 This extension uses the current DeepSeek V4 API model IDs:
