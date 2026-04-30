@@ -1,8 +1,8 @@
 {
   "name": "copilot-vscode-deepseek",
   "displayName": "DeepSeek for Copilot",
-  "description": "Use DeepSeek V4 models in VS Code Copilot Chat",
-  "version": "0.2.5",
+  "description": "Use DeepSeek V4 models in VS Code Copilot Chat with thinking effort presets & temperature presets",
+  "version": "0.5.0",
   "type": "module",
   "publisher": "DenizhanDaklr",
   "repository": {
@@ -12,7 +12,7 @@
   "icon": "images/Deepseek-Logo-Icon-PNG.png",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.108.0"
+    "vscode": "^1.118.0"
   },
   "categories": [
     "AI",
@@ -20,20 +20,28 @@
   ],
   "keywords": [
     "deepseek",
+    "deepseek v4",
     "copilot",
+    "github copilot",
+    "copilot chat",
+    "language model",
+    "thinking",
+    "reasoning",
     "ai",
-    "chat",
-    "language model"
+    "chat"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
-  "extensionKind": ["ui"],
+  "extensionKind": [
+    "workspace"
+  ],
   "contributes": {
     "languageModelChatProviders": [
       {
         "vendor": "deepseek",
-        "displayName": "DeepSeek",
-        "managementCommand": "deepseek.setApiKey"
+        "displayName": "DeepSeek"
       }
     ],
     "commands": [
@@ -42,12 +50,16 @@
         "title": "DeepSeek: Set API Key"
       },
       {
-        "command": "deepseek.setReasoningEffort",
-        "title": "DeepSeek: Set Reasoning Effort"
-      },
-      {
         "command": "deepseek.setTemperature",
         "title": "DeepSeek: Set Temperature"
+      },
+      {
+        "command": "deepseek.clearApiKey",
+        "title": "DeepSeek: Clear API Key"
+      },
+      {
+        "command": "deepseek.showLogs",
+        "title": "DeepSeek: Show Logs"
       }
     ],
     "configuration": {
@@ -59,22 +71,12 @@
           "description": "DeepSeek API key (fallback if not set via command). Use 'DeepSeek: Set API Key' command for secure storage.",
           "scope": "application"
         },
-        "deepseek.reasoningEffort": {
-          "type": "string",
-          "enum": [
-            "high",
-            "max"
-          ],
-          "default": "high",
-          "description": "Reasoning effort level for DeepSeek thinking models",
-          "scope": "application"
-        },
         "deepseek.temperature": {
           "type": "number",
           "default": 1,
           "minimum": 0,
           "maximum": 2,
-          "description": "Temperature for DeepSeek models (0.0 = deterministic, 2.0 = creative)",
+          "description": "Default temperature when not set in model picker. Use 'DeepSeek: Set Temperature' command for presets + custom.",
           "scope": "application"
         },
         "deepseek.baseUrl": {
@@ -97,7 +99,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.3.11",
     "@types/node": "20.19.30",
-    "@types/vscode": "1.108.1",
+    "@types/vscode": "^1.118.0",
     "@typescript-eslint/eslint-plugin": "8.53.0",
     "@typescript-eslint/parser": "8.53.0",
     "@vscode/vsce": "^2.25.0",

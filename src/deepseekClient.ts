@@ -1,4 +1,5 @@
 import type { CancellationToken } from 'vscode';
+import { logger } from './logger.js';
 
 export interface DeepSeekMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -39,6 +40,9 @@ export interface DeepSeekRequest {
   max_tokens?: number;
   tools?: DeepSeekTool[];
   tool_choice?: 'none' | 'auto' | 'required';
+  stream_options?: {
+    include_usage: boolean;
+  };
 }
 
 export interface DeepSeekStreamChunk {
@@ -64,14 +68,31 @@ export interface DeepSeekStreamChunk {
     };
     finish_reason: string | null;
   }>;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
+  };
+}
+
+export interface DeepSeekUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
 }
 
 export interface StreamCallbacks {
   onContent: (content: string) => void;
   onReasoningContent?: (content: string) => void;
+  onThinking?: (text: string) => void;
   onToolCall: (toolCall: DeepSeekToolCall) => void;
   onError: (error: Error) => void;
   onDone: () => void;
+  onUsage?: (usage: DeepSeekUsage) => void;
 }
 
 type DeepSeekSseState = {
@@ -80,7 +101,7 @@ type DeepSeekSseState = {
 
 type StreamProgressCallbacks = Pick<
   StreamCallbacks,
-  'onContent' | 'onReasoningContent' | 'onToolCall' | 'onDone'
+  'onContent' | 'onReasoningContent' | 'onThinking' | 'onToolCall' | 'onDone' | 'onUsage'
 >;
 
 function flushPendingToolCalls(
@@ -117,6 +138,10 @@ function processDeepSeekSseLines(
       try {
         const chunk: DeepSeekStreamChunk = JSON.parse(jsonStr);
 
+        if (chunk.usage) {
+          callbacks.onUsage?.(chunk.usage);
+        }
+
         if (!chunk.choices || chunk.choices.length === 0) {
           continue;
         }
@@ -131,6 +156,7 @@ function processDeepSeekSseLines(
         if (delta) {
           if (delta.reasoning_content) {
             callbacks.onReasoningContent?.(delta.reasoning_content);
+            callbacks.onThinking?.(delta.reasoning_content);
           }
 
           if (delta.content) {
@@ -169,8 +195,7 @@ function processDeepSeekSseLines(
           flushPendingToolCalls(state.pendingToolCalls, callbacks.onToolCall);
         }
       } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to parse chunk:', jsonStr, e);
+        logger.error('Failed to parse SSE chunk:', jsonStr.slice(0, 200), e);
       }
     }
   }
@@ -184,9 +209,6 @@ export class DeepSeekClient {
     private readonly apiKey: string,
   ) {}
 
-  /**
-   * Stream chat completion from DeepSeek API
-   */
   async streamChatCompletion(
     request: DeepSeekRequest,
     callbacks: StreamCallbacks,
@@ -210,17 +232,14 @@ export class DeepSeekClient {
         body: JSON.stringify({
           ...request,
           stream: true,
+          stream_options: { include_usage: true },
         }),
         signal: controller.signal,
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        // eslint-disable-next-line no-console
-        console.error(
-          `[DeepSeek] HTTP ${response.status} (full response body for diagnosis):\n`,
-          errorText,
-        );
+        logger.error(`[DeepSeek] HTTP ${response.status}:`, errorText);
 
         let errorMessage: string;
 
@@ -253,7 +272,9 @@ export class DeepSeekClient {
       const progressCallbacks: StreamProgressCallbacks = {
         onContent: callbacks.onContent,
         onReasoningContent: callbacks.onReasoningContent,
+        onThinking: callbacks.onThinking,
         onToolCall: callbacks.onToolCall,
+        onUsage: callbacks.onUsage,
         onDone: () => {
           if (streamTerminatedByDone) {
             return;
