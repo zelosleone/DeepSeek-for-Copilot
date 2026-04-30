@@ -48,7 +48,7 @@ export interface DeepSeekStreamChunk {
   model: string;
   choices: Array<{
     index: number;
-    delta: {
+    delta?: {
       role?: string;
       content?: string;
       reasoning_content?: string;
@@ -74,6 +74,110 @@ export interface StreamCallbacks {
   onDone: () => void;
 }
 
+type DeepSeekSseState = {
+  pendingToolCalls: Map<number, DeepSeekToolCall>;
+};
+
+type StreamProgressCallbacks = Pick<
+  StreamCallbacks,
+  'onContent' | 'onReasoningContent' | 'onToolCall' | 'onDone'
+>;
+
+function flushPendingToolCalls(
+  pendingToolCalls: Map<number, DeepSeekToolCall>,
+  onToolCall: StreamCallbacks['onToolCall'],
+): void {
+  for (const toolCall of pendingToolCalls.values()) {
+    onToolCall(toolCall);
+  }
+  pendingToolCalls.clear();
+}
+
+function processDeepSeekSseLines(
+  lines: readonly string[],
+  state: DeepSeekSseState,
+  callbacks: StreamProgressCallbacks,
+): boolean {
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith(':')) {
+      continue;
+    }
+
+    if (trimmed === 'data: [DONE]') {
+      flushPendingToolCalls(state.pendingToolCalls, callbacks.onToolCall);
+      callbacks.onDone();
+      return true;
+    }
+
+    if (trimmed.startsWith('data: ')) {
+      const jsonStr = trimmed.slice(6);
+
+      try {
+        const chunk: DeepSeekStreamChunk = JSON.parse(jsonStr);
+
+        if (!chunk.choices || chunk.choices.length === 0) {
+          continue;
+        }
+
+        const choice = chunk.choices[0];
+
+        if (!choice) {
+          continue;
+        }
+
+        const delta = choice.delta;
+        if (delta) {
+          if (delta.reasoning_content) {
+            callbacks.onReasoningContent?.(delta.reasoning_content);
+          }
+
+          if (delta.content) {
+            callbacks.onContent(delta.content);
+          }
+
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              let pending = state.pendingToolCalls.get(tc.index);
+
+              if (!pending && tc.id) {
+                pending = {
+                  id: tc.id,
+                  type: 'function',
+                  function: {
+                    name: '',
+                    arguments: '',
+                  },
+                };
+                state.pendingToolCalls.set(tc.index, pending);
+              }
+
+              if (pending) {
+                if (tc.function?.name) {
+                  pending.function.name += tc.function.name;
+                }
+                if (tc.function?.arguments) {
+                  pending.function.arguments += tc.function.arguments;
+                }
+              }
+            }
+          }
+        }
+
+        if (choice.finish_reason === 'tool_calls') {
+          flushPendingToolCalls(state.pendingToolCalls, callbacks.onToolCall);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to parse chunk:', jsonStr, e);
+      }
+    }
+  }
+
+  return false;
+}
+
 export class DeepSeekClient {
   constructor(
     private readonly baseUrl: string,
@@ -94,6 +198,8 @@ export class DeepSeekClient {
       controller.abort();
     });
 
+    let streamTerminatedByDone = false;
+
     try {
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -110,11 +216,20 @@ export class DeepSeekClient {
 
       if (!response.ok) {
         const errorText = await response.text();
+        // eslint-disable-next-line no-console
+        console.error(
+          `[DeepSeek] HTTP ${response.status} (full response body for diagnosis):\n`,
+          errorText,
+        );
+
         let errorMessage: string;
 
         try {
-          const errorJson = JSON.parse(errorText);
-          errorMessage = errorJson.error?.message || errorJson.message || errorText;
+          const errorJson = JSON.parse(errorText) as {
+            error?: { message?: string };
+            message?: string;
+          };
+          errorMessage = errorJson.error?.message ?? errorJson.message ?? errorText;
         } catch {
           errorMessage = errorText;
         }
@@ -131,80 +246,21 @@ export class DeepSeekClient {
       let buffer = '';
       const MAX_BUFFER_SIZE = 1_000_000;
 
-      const pendingToolCalls = new Map<number, DeepSeekToolCall>();
+      const sseState: DeepSeekSseState = {
+        pendingToolCalls: new Map<number, DeepSeekToolCall>(),
+      };
 
-      const processLines = (lines: string[]): void => {
-        for (const line of lines) {
-          const trimmed = line.trim();
-
-          if (!trimmed || trimmed.startsWith(':')) {
-            continue;
-          }
-
-          if (trimmed === 'data: [DONE]') {
-            for (const toolCall of pendingToolCalls.values()) {
-              callbacks.onToolCall(toolCall);
-            }
-            callbacks.onDone();
+      const progressCallbacks: StreamProgressCallbacks = {
+        onContent: callbacks.onContent,
+        onReasoningContent: callbacks.onReasoningContent,
+        onToolCall: callbacks.onToolCall,
+        onDone: () => {
+          if (streamTerminatedByDone) {
             return;
           }
-
-          if (trimmed.startsWith('data: ')) {
-            const jsonStr = trimmed.slice(6);
-
-            try {
-              const chunk: DeepSeekStreamChunk = JSON.parse(jsonStr);
-              const choice = chunk.choices[0];
-
-              if (!choice) continue;
-
-              if (choice.delta.reasoning_content) {
-                callbacks.onReasoningContent?.(choice.delta.reasoning_content);
-              }
-
-              if (choice.delta.content) {
-                callbacks.onContent(choice.delta.content);
-              }
-
-              if (choice.delta.tool_calls) {
-                for (const tc of choice.delta.tool_calls) {
-                  let pending = pendingToolCalls.get(tc.index);
-
-                  if (!pending && tc.id) {
-                    pending = {
-                      id: tc.id,
-                      type: 'function',
-                      function: {
-                        name: '',
-                        arguments: '',
-                      },
-                    };
-                    pendingToolCalls.set(tc.index, pending);
-                  }
-
-                  if (pending) {
-                    if (tc.function?.name) {
-                      pending.function.name += tc.function.name;
-                    }
-                    if (tc.function?.arguments) {
-                      pending.function.arguments += tc.function.arguments;
-                    }
-                  }
-                }
-              }
-
-              if (choice.finish_reason === 'tool_calls') {
-                for (const toolCall of pendingToolCalls.values()) {
-                  callbacks.onToolCall(toolCall);
-                }
-                pendingToolCalls.clear();
-              }
-            } catch (e) {
-              // eslint-disable-next-line no-console
-              console.error('Failed to parse chunk:', jsonStr, e);
-            }
-          }
-        }
+          streamTerminatedByDone = true;
+          callbacks.onDone();
+        },
       };
 
       while (true) {
@@ -230,18 +286,31 @@ export class DeepSeekClient {
           );
         }
 
-        processLines(lines);
+        processDeepSeekSseLines(lines, sseState, progressCallbacks);
       }
 
       buffer += decoder.decode();
 
       if (buffer) {
-        const lines = buffer.split('\n');
-        processLines(lines);
+        const tailLines = buffer.split('\n');
+        processDeepSeekSseLines(tailLines, sseState, progressCallbacks);
+      }
+
+      const cancelledEarly = cancellationToken?.isCancellationRequested === true;
+
+      if (cancelledEarly) {
+        if (!streamTerminatedByDone) {
+          callbacks.onDone();
+        }
+      } else if (!streamTerminatedByDone) {
+        flushPendingToolCalls(sseState.pendingToolCalls, callbacks.onToolCall);
+        callbacks.onDone();
       }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        callbacks.onDone();
+        if (!streamTerminatedByDone) {
+          callbacks.onDone();
+        }
         return;
       }
       callbacks.onError(error instanceof Error ? error : new Error(String(error)));

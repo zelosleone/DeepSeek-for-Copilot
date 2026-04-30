@@ -2,7 +2,7 @@
   "name": "copilot-vscode-deepseek",
   "displayName": "DeepSeek for Copilot",
   "description": "Use DeepSeek V4 models in VS Code Copilot Chat",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "type": "module",
   "publisher": "DenizhanDaklr",
   "repository": {

@@ -10,15 +10,21 @@ export function activate(context: vscode.ExtensionContext) {
     provider.configureApiKey(),
   );
 
-  const reasoningEffortDisposable = vscode.commands.registerCommand('deepseek.setReasoningEffort', () =>
-    provider.configureReasoningEffort(),
+  const reasoningEffortDisposable = vscode.commands.registerCommand(
+    'deepseek.setReasoningEffort',
+    () => provider.configureReasoningEffort(),
   );
 
   const temperatureDisposable = vscode.commands.registerCommand('deepseek.setTemperature', () =>
     provider.configureTemperature(),
   );
 
-  context.subscriptions.push(providerDisposable, commandDisposable, reasoningEffortDisposable, temperatureDisposable);
+  context.subscriptions.push(
+    providerDisposable,
+    commandDisposable,
+    reasoningEffortDisposable,
+    temperatureDisposable,
+  );
 
   // eslint-disable-next-line no-console
   console.log('DeepSeek extension activated');

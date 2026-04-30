@@ -10,11 +10,11 @@ export default [
       parserOptions: {
         ecmaVersion: 'latest',
         sourceType: 'module',
-        project: './tsconfig.json'
+        project: './tsconfig.json',
       },
       globals: {
         ...globals.node,
-      }
+      },
     },
     plugins: {
       '@typescript-eslint': typescriptEslint,
@@ -25,13 +25,13 @@ export default [
       '@typescript-eslint/explicit-module-boundary-types': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-      
+
       // General rules
       'no-console': 'warn',
       'semi': ['error', 'always'],
       'quotes': ['error', 'single', { avoidEscape: true }],
       'indent': ['error', 2, { SwitchCase: 1 }],
       'comma-dangle': ['error', 'always-multiline'],
-    }
-  }
+    },
+  },
 ];

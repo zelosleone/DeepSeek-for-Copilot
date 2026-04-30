@@ -101,7 +101,9 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
   async configureReasoningEffort(): Promise<void> {
     const options = ['high', 'max'] as const;
-    const current = vscode.workspace.getConfiguration('deepseek').get<string>('reasoningEffort', 'high');
+    const current = vscode.workspace
+      .getConfiguration('deepseek')
+      .get<string>('reasoningEffort', 'high');
 
     const selection = await vscode.window.showQuickPick(
       options.map((o) => ({
@@ -115,7 +117,9 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     );
 
     if (selection) {
-      await vscode.workspace.getConfiguration('deepseek').update('reasoningEffort', selection.value, true);
+      await vscode.workspace
+        .getConfiguration('deepseek')
+        .update('reasoningEffort', selection.value, true);
       vscode.window.showInformationMessage(`DeepSeek reasoning effort set to "${selection.value}"`);
     }
   }
@@ -222,7 +226,9 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     const tools = modelDef.capabilities.toolCalling ? this.convertTools(options.tools) : undefined;
     const toolChoice = this.convertToolChoice(options.toolMode, tools);
 
-    const temperature = vscode.workspace.getConfiguration('deepseek').get<number>('temperature', 1.0);
+    const temperature = vscode.workspace
+      .getConfiguration('deepseek')
+      .get<number>('temperature', 1.0);
 
     let currentReasoningContent = '';
 
@@ -354,7 +360,9 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private getReasoningEffort(
     modelOptions: Record<string, unknown> | undefined,
   ): ReasoningEffort | undefined {
-    const configValue = vscode.workspace.getConfiguration('deepseek').get<string>('reasoningEffort');
+    const configValue = vscode.workspace
+      .getConfiguration('deepseek')
+      .get<string>('reasoningEffort');
     if (configValue) {
       const normalized = this.normalizeReasoningEffort(configValue);
       if (normalized) {
