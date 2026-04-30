@@ -3,24 +3,24 @@ import { AuthManager } from '../auth.js';
 import { DeepSeekClient, type DeepSeekToolCall, type DeepSeekUsage } from '../deepseekClient.js';
 import { logger } from '../logger.js';
 import {
-  type ModelDefinition,
-  type ModelConfigurationOptions,
-  type ModelPickerChatInformation,
-  type ReasoningEntry,
-  type ReasoningEffort,
-  MODEL_CONFIGURATION_SCHEMA,
-  MODELS,
-  API_KEY_REQUIRED_DETAIL,
-  REASONING_HISTORY_STORAGE_KEY,
-  type ReasoningHistoryState,
-} from './schema.js';
-import {
   convertMessages,
   convertTools,
   countMessageChars,
-  getConfiguredThinkingEffort,
   getConfiguredTemperature,
+  getConfiguredThinkingEffort,
 } from './convert.js';
+import {
+  API_KEY_REQUIRED_DETAIL,
+  MODEL_CONFIGURATION_SCHEMA,
+  MODELS,
+  type ModelConfigurationOptions,
+  type ModelDefinition,
+  type ModelPickerChatInformation,
+  REASONING_HISTORY_STORAGE_KEY,
+  type ReasoningEffort,
+  type ReasoningEntry,
+  type ReasoningHistoryState,
+} from './schema.js';
 
 export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private readonly context: vscode.ExtensionContext;
@@ -28,7 +28,8 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private readonly onUsage?: (usage: DeepSeekUsage) => void;
   private readonly onDidChangeLanguageModelChatInformationEmitter = new vscode.EventEmitter<void>();
 
-  readonly onDidChangeLanguageModelChatInformation = this.onDidChangeLanguageModelChatInformationEmitter.event;
+  readonly onDidChangeLanguageModelChatInformation =
+    this.onDidChangeLanguageModelChatInformationEmitter.event;
 
   private readonly reasoningCache: Map<number, ReasoningEntry>;
   private nextReasoningTurnIndex: number;
@@ -39,7 +40,9 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     this.authManager = new AuthManager(context);
     this.onUsage = onUsage;
 
-    const persisted = context.workspaceState.get<ReasoningHistoryState>(REASONING_HISTORY_STORAGE_KEY);
+    const persisted = context.workspaceState.get<ReasoningHistoryState>(
+      REASONING_HISTORY_STORAGE_KEY,
+    );
     this.reasoningCache = new Map(persisted?.entries ?? []);
     this.nextReasoningTurnIndex = persisted?.nextReasoningTurnIndex ?? this.reasoningCache.size;
 
@@ -76,7 +79,12 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   async configureTemperature(): Promise<void> {
     const presets = [
       { key: 'balanced', label: 'Balanced', value: 1.0, description: 'Default for most tasks' },
-      { key: 'precise', label: 'Precise', value: 0.2, description: 'Coding / Math (deterministic)' },
+      {
+        key: 'precise',
+        label: 'Precise',
+        value: 0.2,
+        description: 'Coding / Math (deterministic)',
+      },
       { key: 'creative', label: 'Creative', value: 1.3, description: 'Writing / Brainstorming' },
       { key: 'max', label: 'Max', value: 1.5, description: 'Maximum variety' },
     ];
@@ -162,11 +170,13 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
     const thinkingParams = isThinkingModel
       ? {
-        thinking: {
-          type: thinkingEffort === 'none' ? 'disabled' as const : 'enabled' as const,
-        },
-        ...(thinkingEffort === 'none' ? {} : { reasoning_effort: thinkingEffort as ReasoningEffort }),
-      }
+          thinking: {
+            type: thinkingEffort === 'none' ? ('disabled' as const) : ('enabled' as const),
+          },
+          ...(thinkingEffort === 'none'
+            ? {}
+            : { reasoning_effort: thinkingEffort as ReasoningEffort }),
+        }
       : {};
 
     let accumulatedReasoning = '';
@@ -236,11 +246,12 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
             const cacheHit = usage.prompt_cache_hit_tokens ?? 0;
             const cacheMiss = usage.prompt_cache_miss_tokens ?? 0;
             const cacheTotal = cacheHit + cacheMiss;
-            const hitRate = cacheTotal > 0 ? `${((cacheHit / cacheTotal) * 100).toFixed(0)}%` : 'n/a';
+            const hitRate =
+              cacheTotal > 0 ? `${((cacheHit / cacheTotal) * 100).toFixed(0)}%` : 'n/a';
             logger.info(
               `tokens: context=${usage.prompt_tokens} completion=${usage.completion_tokens}` +
-              ` | cache: hit=${cacheHit} miss=${cacheMiss} rate=${hitRate}` +
-              ` | temp=${temperature} chars/tok=${this.charsPerToken.toFixed(2)}`,
+                ` | cache: hit=${cacheHit} miss=${cacheMiss} rate=${hitRate}` +
+                ` | temp=${temperature} chars/tok=${this.charsPerToken.toFixed(2)}`,
             );
 
             this.onUsage?.(usage);
@@ -292,7 +303,10 @@ function toChatInfo(m: ModelDefinition, hasApiKey: boolean): ModelPickerChatInfo
     maxInputTokens: m.maxInputTokens,
     maxOutputTokens: m.maxOutputTokens,
     isUserSelectable: true,
-    capabilities: { toolCalling: m.capabilities.toolCalling, imageInput: m.capabilities.imageInput },
+    capabilities: {
+      toolCalling: m.capabilities.toolCalling,
+      imageInput: m.capabilities.imageInput,
+    },
     ...(m.capabilities.thinking ? { configurationSchema: MODEL_CONFIGURATION_SCHEMA } : {}),
   };
 }

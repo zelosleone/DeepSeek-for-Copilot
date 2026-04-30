@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { DeepSeekChatProvider } from './provider/index.js';
 import { logger } from './logger.js';
+import { DeepSeekChatProvider } from './provider/index.js';
 
 function formatTokenCount(value: number): string {
   return value.toLocaleString();
@@ -57,5 +57,7 @@ export async function deactivate() {
   try {
     logger.info('Extension deactivated');
     logger.dispose();
-  } catch { /* cleanup */ }
+  } catch {
+    /* cleanup */
+  }
 }

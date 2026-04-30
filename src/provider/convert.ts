@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
+import type { DeepSeekMessage, DeepSeekTool, DeepSeekToolCall } from '../deepseekClient.js';
 import type {
-  DeepSeekMessage,
-  DeepSeekTool,
-  DeepSeekToolCall,
-} from '../deepseekClient.js';
-import type { ReasoningEntry, TemperaturePreset, ModelConfigurationOptions, ThinkingEffort } from './schema.js';
+  ModelConfigurationOptions,
+  ReasoningEntry,
+  TemperaturePreset,
+  ThinkingEffort,
+} from './schema.js';
 import { TEMPERATURE_PRESET_VALUES } from './schema.js';
 
 export function convertMessages(
@@ -108,8 +109,8 @@ export function countMessageChars(messages: DeepSeekMessage[]): number {
 }
 
 export function getConfiguredThinkingEffort(options: ModelConfigurationOptions): ThinkingEffort {
-  const configuredEffort = options.modelConfiguration?.reasoningEffort
-    ?? options.configuration?.reasoningEffort;
+  const configuredEffort =
+    options.modelConfiguration?.reasoningEffort ?? options.configuration?.reasoningEffort;
   if (configuredEffort === 'none') return 'none';
   if (configuredEffort === 'max') return 'max';
   return 'high';

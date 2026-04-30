@@ -17,7 +17,7 @@ export class AuthManager {
 
     const config = vscode.workspace.getConfiguration('deepseek');
     const settingsKey = config.get<string>('apiKey');
-    if (settingsKey && settingsKey.trim()) {
+    if (settingsKey?.trim()) {
       return settingsKey.trim();
     }
 

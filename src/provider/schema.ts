@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+import type * as vscode from 'vscode';
 
 export type ReasoningEffort = 'high' | 'max';
 
@@ -14,11 +14,7 @@ export const MODEL_CONFIGURATION_SCHEMA = {
       title: 'Thinking Effort',
       enum: ['none', 'high', 'max'],
       enumItemLabels: ['None', 'High', 'Max'],
-      enumDescriptions: [
-        'No reasoning',
-        'Balanced',
-        'Max reasoning',
-      ],
+      enumDescriptions: ['No reasoning', 'Balanced', 'Max reasoning'],
       default: 'high',
       group: 'navigation',
     },
