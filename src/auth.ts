@@ -4,9 +4,13 @@ const API_KEY_SECRET = 'deepseek.apiKey';
 
 export class AuthManager {
   private readonly secretStorage: vscode.SecretStorage;
+  private readonly baseUrl: string;
 
   constructor(context: vscode.ExtensionContext) {
     this.secretStorage = context.secrets;
+    this.baseUrl =
+      vscode.workspace.getConfiguration('deepseek').get<string>('baseUrl') ||
+      'https://api.deepseek.com';
   }
 
   async getApiKey(): Promise<string | undefined> {
@@ -64,7 +68,6 @@ export class AuthManager {
   }
 
   getBaseUrl(): string {
-    const config = vscode.workspace.getConfiguration('deepseek');
-    return config.get<string>('baseUrl') || 'https://api.deepseek.com';
+    return this.baseUrl;
   }
 }

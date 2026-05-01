@@ -1,38 +1,55 @@
 import * as vscode from 'vscode';
 import { logger } from './logger.js';
-import { DeepSeekChatProvider } from './provider/index.js';
+import { DeepSeekChatProvider, type SessionUsageInfo } from './provider/index.js';
 
-function formatTokenCount(value: number): string {
-  return value.toLocaleString();
+function updateStatusBar(item: vscode.StatusBarItem, usage: SessionUsageInfo | undefined): void {
+  if (!usage) {
+    item.hide();
+    return;
+  }
+
+  const ctx = usage.usage.prompt_tokens.toLocaleString();
+  const total = usage.usage.total_tokens.toLocaleString();
+  item.text = `DeepSeek: $(database) ${ctx} tok`;
+  item.tooltip = [
+    `Context: ${ctx} tokens`,
+    `Completion: ${usage.usage.completion_tokens.toLocaleString()}`,
+    `Total: ${total} tokens`,
+    `Cache hit: ${(usage.usage.prompt_cache_hit_tokens ?? 0).toLocaleString()}`,
+    `Cache miss: ${(usage.usage.prompt_cache_miss_tokens ?? 0).toLocaleString()}`,
+  ].join('\n');
+  item.show();
 }
 
 export function activate(context: vscode.ExtensionContext) {
   logger.info('Activating extension');
 
   let usageStatusBarItem: vscode.StatusBarItem | undefined;
+  let lastVisibleGenerationId = -1;
+
+  function onTabOrEditorChange(): void {
+    if (!usageStatusBarItem) return;
+
+    lastVisibleGenerationId = Infinity;
+    usageStatusBarItem.hide();
+  }
 
   try {
     usageStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     usageStatusBarItem.command = 'deepseek.showLogs';
 
-    const provider = new DeepSeekChatProvider(context, (usage) => {
+    const provider = new DeepSeekChatProvider(context, (info: SessionUsageInfo) => {
       if (!usageStatusBarItem) return;
 
-      const ctx = formatTokenCount(usage.prompt_tokens);
-      const total = formatTokenCount(usage.total_tokens);
-      usageStatusBarItem.text = `DeepSeek: $(database) ${ctx} tok`;
-      usageStatusBarItem.tooltip = [
-        `Context: ${ctx} tokens`,
-        `Completion: ${formatTokenCount(usage.completion_tokens)}`,
-        `Total: ${total} tokens`,
-        `Cache hit: ${formatTokenCount(usage.prompt_cache_hit_tokens ?? 0)}`,
-        `Cache miss: ${formatTokenCount(usage.prompt_cache_miss_tokens ?? 0)}`,
-      ].join('\n');
-      usageStatusBarItem.show();
+      if (info.generationId > lastVisibleGenerationId) {
+        updateStatusBar(usageStatusBarItem, info);
+      }
     });
 
     context.subscriptions.push(
       usageStatusBarItem,
+      vscode.window.tabGroups.onDidChangeTabs(onTabOrEditorChange),
+      vscode.window.onDidChangeActiveTextEditor(onTabOrEditorChange),
       vscode.commands.registerCommand('deepseek.setApiKey', () => provider.configureApiKey()),
       vscode.commands.registerCommand('deepseek.setTemperature', () =>
         provider.configureTemperature(),
@@ -53,11 +70,11 @@ export function activate(context: vscode.ExtensionContext) {
   }
 }
 
-export async function deactivate() {
+export async function deactivate(): Promise<void> {
   try {
     logger.info('Extension deactivated');
-    logger.dispose();
   } catch {
-    /* cleanup */
+    // VS Code may dispose the output channel before calling deactivate.
   }
+  logger.dispose();
 }

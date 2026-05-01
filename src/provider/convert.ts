@@ -8,6 +8,24 @@ import type {
 } from './schema.js';
 import { TEMPERATURE_PRESET_VALUES } from './schema.js';
 
+function extractTextFromParts(
+  parts: readonly unknown[],
+): string {
+  let text = '';
+  for (const part of parts) {
+    if (part instanceof vscode.LanguageModelTextPart) {
+      text += part.value;
+    }
+  }
+  return text;
+}
+
+export function getMessageText(
+  message: vscode.LanguageModelChatRequestMessage,
+): string {
+  return extractTextFromParts(message.content);
+}
+
 export function convertMessages(
   messages: readonly vscode.LanguageModelChatRequestMessage[],
   isThinkingModel: boolean,
@@ -32,12 +50,7 @@ export function convertMessages(
           function: { name: part.name, arguments: JSON.stringify(part.input) },
         });
       } else if (part instanceof vscode.LanguageModelToolResultPart) {
-        let toolContent = '';
-        for (const item of part.content) {
-          if (item instanceof vscode.LanguageModelTextPart) {
-            toolContent += item.value;
-          }
-        }
+        const toolContent = extractTextFromParts(part.content);
         toolResults.push({
           callId: part.callId,
           content: toolContent || JSON.stringify(part.content),
@@ -125,14 +138,14 @@ export function getConfiguredTemperature(options: ModelConfigurationOptions): nu
 
 export function normalizeTemperatureValue(value: unknown): number | undefined {
   if (typeof value === 'number' && !Number.isNaN(value)) {
-    return Math.max(0, Math.min(2, value));
+    return clampTemperature(value);
   }
   if (typeof value !== 'string') return undefined;
 
   // Custom preset: read from settings
   if (value === 'custom') {
     const custom = vscode.workspace.getConfiguration('deepseek').get<number>('temperature');
-    if (custom !== undefined && !Number.isNaN(custom)) return Math.max(0, Math.min(2, custom));
+    if (custom !== undefined && !Number.isNaN(custom)) return clampTemperature(custom);
     return undefined;
   }
 
@@ -140,6 +153,10 @@ export function normalizeTemperatureValue(value: unknown): number | undefined {
   if (preset in TEMPERATURE_PRESET_VALUES) return TEMPERATURE_PRESET_VALUES[preset];
 
   const parsed = Number.parseFloat(value);
-  if (!Number.isNaN(parsed)) return Math.max(0, Math.min(2, parsed));
+  if (!Number.isNaN(parsed)) return clampTemperature(parsed);
   return undefined;
+}
+
+function clampTemperature(value: number): number {
+  return Math.max(0, Math.min(2, value));
 }

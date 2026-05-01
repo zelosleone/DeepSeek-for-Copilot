@@ -68,13 +68,7 @@ export interface DeepSeekStreamChunk {
     };
     finish_reason: string | null;
   }>;
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    prompt_cache_hit_tokens?: number;
-    prompt_cache_miss_tokens?: number;
-  };
+  usage?: DeepSeekUsage;
 }
 
 export interface DeepSeekUsage {
@@ -99,11 +93,6 @@ type DeepSeekSseState = {
   pendingToolCalls: Map<number, DeepSeekToolCall>;
 };
 
-type StreamProgressCallbacks = Pick<
-  StreamCallbacks,
-  'onContent' | 'onReasoningContent' | 'onThinking' | 'onToolCall' | 'onDone' | 'onUsage'
->;
-
 function flushPendingToolCalls(
   pendingToolCalls: Map<number, DeepSeekToolCall>,
   onToolCall: StreamCallbacks['onToolCall'],
@@ -117,7 +106,10 @@ function flushPendingToolCalls(
 function processDeepSeekSseLines(
   lines: readonly string[],
   state: DeepSeekSseState,
-  callbacks: StreamProgressCallbacks,
+  callbacks: Pick<
+    StreamCallbacks,
+    'onContent' | 'onReasoningContent' | 'onThinking' | 'onToolCall' | 'onDone' | 'onUsage'
+  >,
 ): boolean {
   for (const line of lines) {
     const trimmed = line.trim();
@@ -146,13 +138,7 @@ function processDeepSeekSseLines(
           continue;
         }
 
-        const choice = chunk.choices[0];
-
-        if (!choice) {
-          continue;
-        }
-
-        const delta = choice.delta;
+        const delta = chunk.choices[0].delta;
         if (delta) {
           if (delta.reasoning_content) {
             callbacks.onReasoningContent?.(delta.reasoning_content);
@@ -191,11 +177,15 @@ function processDeepSeekSseLines(
           }
         }
 
-        if (choice.finish_reason === 'tool_calls') {
+        if (chunk.choices[0].finish_reason === 'tool_calls') {
           flushPendingToolCalls(state.pendingToolCalls, callbacks.onToolCall);
         }
       } catch (e) {
-        logger.error('Failed to parse SSE chunk:', jsonStr.slice(0, 200), e);
+        if (e instanceof SyntaxError) {
+          logger.error('Failed to parse SSE chunk:', jsonStr.slice(0, 200), e);
+        } else {
+          throw e;
+        }
       }
     }
   }
@@ -269,7 +259,7 @@ export class DeepSeekClient {
         pendingToolCalls: new Map<number, DeepSeekToolCall>(),
       };
 
-      const progressCallbacks: StreamProgressCallbacks = {
+      const progressCallbacks: Parameters<typeof processDeepSeekSseLines>[2] = {
         onContent: callbacks.onContent,
         onReasoningContent: callbacks.onReasoningContent,
         onThinking: callbacks.onThinking,
@@ -301,7 +291,7 @@ export class DeepSeekClient {
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
-        if (buffer.length > MAX_BUFFER_SIZE && !buffer.includes('\n')) {
+        if (buffer.length > MAX_BUFFER_SIZE) {
           throw new Error(
             `Streaming buffer exceeded maximum size (${MAX_BUFFER_SIZE} bytes). Possible malformed stream.`,
           );

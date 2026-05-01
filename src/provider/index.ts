@@ -8,6 +8,8 @@ import {
   countMessageChars,
   getConfiguredTemperature,
   getConfiguredThinkingEffort,
+  getMessageText,
+  normalizeTemperatureValue,
 } from './convert.js';
 import {
   API_KEY_REQUIRED_DETAIL,
@@ -22,10 +24,17 @@ import {
   type ReasoningHistoryState,
 } from './schema.js';
 
+export interface SessionUsageInfo {
+  sessionId: string;
+  usage: DeepSeekUsage;
+  generationId: number;
+}
+
 export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
+  private static nextGenerationId = 0;
   private readonly context: vscode.ExtensionContext;
   private readonly authManager: AuthManager;
-  private readonly onUsage?: (usage: DeepSeekUsage) => void;
+  private readonly onUsage?: (info: SessionUsageInfo) => void;
   private readonly onDidChangeLanguageModelChatInformationEmitter = new vscode.EventEmitter<void>();
 
   readonly onDidChangeLanguageModelChatInformation =
@@ -35,7 +44,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private nextReasoningTurnIndex: number;
   private charsPerToken = 4.0;
 
-  constructor(context: vscode.ExtensionContext, onUsage?: (usage: DeepSeekUsage) => void) {
+  constructor(context: vscode.ExtensionContext, onUsage?: (info: SessionUsageInfo) => void) {
     this.context = context;
     this.authManager = new AuthManager(context);
     this.onUsage = onUsage;
@@ -108,8 +117,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
       const input = await vscode.window.showInputBox({
         prompt: 'Enter temperature value (0.0 - 2.0)',
         validateInput: (text) => {
-          const parsed = Number.parseFloat(text);
-          if (Number.isNaN(parsed) || parsed < 0 || parsed > 2) {
+          if (normalizeTemperatureValue(text) === undefined) {
             return 'Value must be a number between 0.0 and 2.0';
           }
           return undefined;
@@ -150,7 +158,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     const baseUrl = this.authManager.getBaseUrl();
     const client = new DeepSeekClient(baseUrl, apiKey);
 
-    const modelDef = findModel(modelInfo.id);
+    const modelDef = MODELS.find((m) => m.id === modelInfo.id);
     if (!modelDef) throw new Error(`Unknown DeepSeek model: ${modelInfo.id}`);
 
     const isThinkingModel = modelDef.capabilities.thinking;
@@ -179,6 +187,8 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
         }
       : {};
 
+    const sessionId = crypto.randomUUID();
+    const generationId = DeepSeekChatProvider.nextGenerationId++;
     let accumulatedReasoning = '';
 
     return new Promise<void>((resolve, reject) => {
@@ -206,9 +216,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
             );
           },
 
-          onReasoningContent: (content: string) => {
-            accumulatedReasoning += content;
-          },
+          onReasoningContent: () => {},
 
           onToolCall: (toolCall: DeepSeekToolCall) => {
             try {
@@ -249,12 +257,12 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
             const hitRate =
               cacheTotal > 0 ? `${((cacheHit / cacheTotal) * 100).toFixed(0)}%` : 'n/a';
             logger.info(
-              `tokens: context=${usage.prompt_tokens} completion=${usage.completion_tokens}` +
+              `[${sessionId}] tokens: context=${usage.prompt_tokens} completion=${usage.completion_tokens}` +
                 ` | cache: hit=${cacheHit} miss=${cacheMiss} rate=${hitRate}` +
                 ` | temp=${temperature} chars/tok=${this.charsPerToken.toFixed(2)}`,
             );
 
-            this.onUsage?.(usage);
+            this.onUsage?.({ sessionId, usage, generationId });
           },
         },
         token,
@@ -272,11 +280,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     }
     if (!text?.content || !Array.isArray(text.content)) return 1;
 
-    let total = 0;
-    for (const part of text.content) {
-      if (part instanceof vscode.LanguageModelTextPart) total += part.value.length;
-    }
-    return Math.max(1, Math.ceil(total / this.charsPerToken));
+    return Math.max(1, Math.ceil(getMessageText(text).length / this.charsPerToken));
   }
 
   private persistReasoningHistory(): Thenable<void> {
@@ -285,10 +289,6 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
       entries: [...this.reasoningCache.entries()],
     });
   }
-}
-
-function findModel(id: string): ModelDefinition | undefined {
-  return MODELS.find((m) => m.id === id);
 }
 
 function toChatInfo(m: ModelDefinition, hasApiKey: boolean): ModelPickerChatInformation {
