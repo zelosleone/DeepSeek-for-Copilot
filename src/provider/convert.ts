@@ -30,9 +30,24 @@ export function convertMessages(
   messages: readonly vscode.LanguageModelChatRequestMessage[],
   isThinkingModel: boolean,
   reasoningCache: Map<number, ReasoningEntry>,
+  startTurnIndex = 0,
 ): DeepSeekMessage[] {
   const result: DeepSeekMessage[] = [];
-  let assistantTurnIndex = 0;
+  let assistantTurnIndex = startTurnIndex;
+
+  // Build a prefix → entry lookup so we can match by content even after
+  // VS Code reorders or trims history (addresses index misalignment).
+  // On prefix collision (two responses with the same opening 500 chars), keep the
+  // most-recent entry so the latest reasoning is preferred.
+  const prefixLookup = new Map<string, ReasoningEntry>();
+  for (const entry of reasoningCache.values()) {
+    if (entry.assistantContentPrefix) {
+      const existing = prefixLookup.get(entry.assistantContentPrefix);
+      if (!existing || entry.timestamp > existing.timestamp) {
+        prefixLookup.set(entry.assistantContentPrefix, entry);
+      }
+    }
+  }
 
   for (const message of messages) {
     const role = mapRole(message.role);
@@ -59,7 +74,11 @@ export function convertMessages(
     }
 
     if (role === 'assistant') {
-      const reasoningContent = reasoningCache.get(assistantTurnIndex)?.text ?? '';
+      // Prefer prefix-based lookup (robust to positional shifts); fall back to
+      // positional index for entries that pre-date the prefix field.
+      const contentPrefix = content.slice(0, 500);
+      const byPrefix = contentPrefix ? prefixLookup.get(contentPrefix) : undefined;
+      const reasoningContent = byPrefix?.text ?? reasoningCache.get(assistantTurnIndex)?.text ?? '';
       assistantTurnIndex += 1;
 
       if (content || toolCalls.length > 0 || isThinkingModel) {

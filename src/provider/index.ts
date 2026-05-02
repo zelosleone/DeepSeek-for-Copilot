@@ -42,6 +42,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
   private readonly reasoningCache: Map<number, ReasoningEntry>;
   private nextReasoningTurnIndex: number;
+  private firstUserMessageFingerprint: string;
   private charsPerToken = 4.0;
 
   constructor(context: vscode.ExtensionContext, onUsage?: (info: SessionUsageInfo) => void) {
@@ -54,6 +55,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     );
     this.reasoningCache = new Map(persisted?.entries ?? []);
     this.nextReasoningTurnIndex = persisted?.nextReasoningTurnIndex ?? this.reasoningCache.size;
+    this.firstUserMessageFingerprint = persisted?.firstUserMessageFingerprint ?? '';
 
     context.subscriptions.push(
       this.onDidChangeLanguageModelChatInformationEmitter,
@@ -166,13 +168,31 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     const thinkingEffort = getConfiguredThinkingEffort(modelConfig);
     const temperature = getConfiguredTemperature(modelConfig);
 
-    if (messages.length <= 2) {
+    const firstUserMessage = messages.find(
+      (m) => m.role === vscode.LanguageModelChatMessageRole.User,
+    );
+    const incomingFingerprint = firstUserMessage
+      ? getMessageText(firstUserMessage).slice(0, 200)
+      : '';
+
+    if (incomingFingerprint !== this.firstUserMessageFingerprint) {
       this.reasoningCache.clear();
       this.nextReasoningTurnIndex = 0;
+      this.firstUserMessageFingerprint = incomingFingerprint;
       void this.persistReasoningHistory();
     }
 
-    const deepseekMessages = convertMessages(messages, isThinkingModel, this.reasoningCache);
+    const assistantCountInMessages = messages.filter(
+      (m) => m.role === vscode.LanguageModelChatMessageRole.Assistant,
+    ).length;
+    const startTurnIndex = Math.max(0, this.nextReasoningTurnIndex - assistantCountInMessages);
+
+    const deepseekMessages = convertMessages(
+      messages,
+      isThinkingModel,
+      this.reasoningCache,
+      startTurnIndex,
+    );
     const tools = modelDef.capabilities.toolCalling ? convertTools(options.tools) : undefined;
     const totalRequestChars = countMessageChars(deepseekMessages);
 
@@ -190,6 +210,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     const sessionId = crypto.randomUUID();
     const generationId = DeepSeekChatProvider.nextGenerationId++;
     let accumulatedReasoning = '';
+    let accumulatedContent = '';
 
     return new Promise<void>((resolve, reject) => {
       client.streamChatCompletion(
@@ -204,6 +225,10 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
         },
         {
           onContent: (content: string) => {
+            // Cap accumulation to the first 500 chars — only the prefix is stored.
+            if (accumulatedContent.length < 500) {
+              accumulatedContent += content;
+            }
             progress.report(new vscode.LanguageModelTextPart(content));
           },
 
@@ -215,8 +240,6 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
               ) as unknown as vscode.LanguageModelResponsePart,
             );
           },
-
-          onReasoningContent: () => {},
 
           onToolCall: (toolCall: DeepSeekToolCall) => {
             try {
@@ -239,6 +262,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
             this.reasoningCache.set(this.nextReasoningTurnIndex, {
               text: isThinkingModel ? accumulatedReasoning : '',
               timestamp: Date.now(),
+              assistantContentPrefix: accumulatedContent.slice(0, 500),
             });
             this.nextReasoningTurnIndex += 1;
             void this.persistReasoningHistory();
@@ -287,6 +311,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     return this.context.workspaceState.update(REASONING_HISTORY_STORAGE_KEY, {
       nextReasoningTurnIndex: this.nextReasoningTurnIndex,
       entries: [...this.reasoningCache.entries()],
+      firstUserMessageFingerprint: this.firstUserMessageFingerprint,
     });
   }
 }

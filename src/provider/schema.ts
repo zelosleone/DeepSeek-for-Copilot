@@ -5,6 +5,10 @@ export type ReasoningEffort = 'high' | 'max';
 export interface ReasoningEntry {
   text: string;
   timestamp: number;
+  /** First 500 chars of the assistant response that produced this reasoning. Used to
+   * re-align cache slots after VS Code trims or re-orders conversation history.
+   * Named "prefix" (not "hash") because it stores raw text, not a digest. */
+  assistantContentPrefix?: string;
 }
 
 export const MODEL_CONFIGURATION_SCHEMA = {
@@ -50,6 +54,7 @@ export const TEMPERATURE_PRESET_VALUES: Record<TemperaturePreset, number> = {
 export interface ReasoningHistoryState {
   nextReasoningTurnIndex: number;
   entries: Array<[number, ReasoningEntry]>;
+  firstUserMessageFingerprint?: string;
 }
 
 export type ModelConfigurationOptions = vscode.ProvideLanguageModelChatResponseOptions & {
