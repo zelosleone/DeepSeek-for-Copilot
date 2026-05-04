@@ -216,8 +216,6 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
             );
           },
 
-          onReasoningContent: () => {},
-
           onToolCall: (toolCall: DeepSeekToolCall) => {
             try {
               const args = JSON.parse(toolCall.function.arguments);

@@ -81,7 +81,6 @@ export interface DeepSeekUsage {
 
 export interface StreamCallbacks {
   onContent: (content: string) => void;
-  onReasoningContent?: (content: string) => void;
   onThinking?: (text: string) => void;
   onToolCall: (toolCall: DeepSeekToolCall) => void;
   onError: (error: Error) => void;
@@ -108,7 +107,7 @@ function processDeepSeekSseLines(
   state: DeepSeekSseState,
   callbacks: Pick<
     StreamCallbacks,
-    'onContent' | 'onReasoningContent' | 'onThinking' | 'onToolCall' | 'onDone' | 'onUsage'
+    'onContent' | 'onThinking' | 'onToolCall' | 'onDone' | 'onUsage'
   >,
 ): boolean {
   for (const line of lines) {
@@ -141,7 +140,6 @@ function processDeepSeekSseLines(
         const delta = chunk.choices[0].delta;
         if (delta) {
           if (delta.reasoning_content) {
-            callbacks.onReasoningContent?.(delta.reasoning_content);
             callbacks.onThinking?.(delta.reasoning_content);
           }
 
@@ -261,7 +259,6 @@ export class DeepSeekClient {
 
       const progressCallbacks: Parameters<typeof processDeepSeekSseLines>[2] = {
         onContent: callbacks.onContent,
-        onReasoningContent: callbacks.onReasoningContent,
         onThinking: callbacks.onThinking,
         onToolCall: callbacks.onToolCall,
         onUsage: callbacks.onUsage,
