@@ -33,11 +33,21 @@ DeepSeek FIM suggestions as you type. Off by default.
 | `deepseek.inlineCompletion.maxTokens` | tokens per suggestion | 128 |
 | `deepseek.inlineCompletion.maxLines` | lines per suggestion | 10 |
 
-Suggestions are cut where they leave the block they started in, and re-indented to
-match the editor's tabs/spaces.
+Suggestions are cut where they leave the block they started in, using a tree-sitter
+parse rather than a guess. Grammars ship for:
+
+`typescript` `typescriptreact` `javascript` `javascriptreact` `python` `go` `rust`
+`java` `csharp` `cpp` `c` `cuda-cpp` `ruby` `php` `shellscript` `powershell` `css`
+`ini` `properties`
+
+Other languages still get suggestions, just no block trimming, bounded only by
+`maxLines`. Suggestions are also re-indented to match the editor's tabs/spaces.
 
 Turn off Copilot's own inline suggestions first (`github.copilot.enable`), otherwise
 both providers compete for the same ghost text.
+
+If suggestions look untrimmed, check **DeepSeek: Show Logs** for a tree-sitter
+warning.
 
 ## Commands
 
@@ -49,6 +59,23 @@ both providers compete for the same ghost text.
 | `DeepSeek: Toggle Inline Completion` | Turn FIM suggestions on or off |
 | `DeepSeek: Open Settings` | Jump to the DeepSeek settings |
 | `DeepSeek: Show Logs` | Open output channel (token counts, cache hit rate) |
+
+## Builds
+
+Releases attach two files:
+
+| File | Use |
+|---|---|
+| `copilot-vscode-deepseek-<version>.vsix` | Install this one. |
+| `...-nes.vsix` | Enables proposed APIs (`inlineCompletionsAdditions`). Sideload only, never published to the Marketplace. |
+
+The `-nes` build also needs this in `~/.vscode/argv.json`, which survives restarts:
+
+```json
+{ "enable-proposed-api": ["DenizhanDaklr.copilot-vscode-deepseek"] }
+```
+
+Build locally with `npm run package` and `npm run package:proposed`.
 
 ## Requirements
 

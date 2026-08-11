@@ -72,7 +72,7 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.lm.registerLanguageModelChatProvider('deepseek', provider),
       vscode.languages.registerInlineCompletionItemProvider(
         { pattern: '**' },
-        new DeepSeekInlineCompletionProvider(new AuthManager(context)),
+        new DeepSeekInlineCompletionProvider(new AuthManager(context), context.extensionUri),
       ),
     );
 

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { type AuthManager, getProviderConfiguredApiKey } from './auth.js';
 import { logger } from './logger.js';
+import { trimToBlockWithTreeSitter } from './treeSitter.js';
 
 /**
  * FIM lives behind the /beta prefix. Note that prefix serves ONLY completions:
@@ -11,6 +12,21 @@ const FIM_PATH = '/beta/completions';
 const MAX_PREFIX_CHARS = 4000;
 const MAX_SUFFIX_CHARS = 1000;
 
+/**
+ * How coarsely the prefix window start is snapped. DeepSeek reuses its prompt cache
+ * by common leading prefix, so a window that slides with the cursor never matches:
+ * every keystroke moves the start and the whole prompt is re-billed at the miss
+ * rate. Snapping the start keeps it byte-identical for this many characters of
+ * typing, at the cost of sending up to that many extra characters.
+ */
+const PREFIX_ANCHOR_CHARS = 2000;
+
+function anchoredPrefixStart(offset: number): number {
+  const rawStart = offset - MAX_PREFIX_CHARS;
+  if (rawStart <= 0) return 0;
+  return Math.floor(rawStart / PREFIX_ANCHOR_CHARS) * PREFIX_ANCHOR_CHARS;
+}
+
 interface FimResponse {
   choices?: Array<{ text?: string }>;
 }
@@ -20,62 +36,20 @@ interface IndentOptions {
   tabSize?: number;
 }
 
-function indentWidth(line: string, tabSize: number): number {
-  let width = 0;
-  for (const ch of line) {
-    if (ch === ' ') width += 1;
-    else if (ch === '\t') width += tabSize;
-    else break;
-  }
-  return width;
+/**
+ * Splits a statement the model welded onto the same line as an opening brace, e.g.
+ * `if (x) {    await save();`. A deliberate one-liner uses a single space
+ * (`{ return; }`), so a run of two or more spaces after `{` is a dropped newline,
+ * and those spaces are the indentation the next line was meant to have.
+ */
+function unweldBraces(completion: string): string {
+  return completion.replace(/\{( {2,})(?=\S)/g, '{\n$1');
 }
 
-/**
- * Keeps a completion from running past the block it started in. Copilot's
- * BlockTrimmer resolves the block boundary from a tree-sitter statement tree; that
- * needs a parser plus a WASM grammar per language, so the boundary here is
- * approximated by indentation. The blank-line and line-limit passes match theirs.
- */
-function trimToBlock(
-  completion: string,
-  baseIndent: number,
-  lineLimit: number,
-  tabSize: number,
-): string {
+/** Hard bound on suggestion size, independent of any block analysis. */
+function capLines(completion: string, lineLimit: number): string {
   const lines = completion.split('\n');
-
-  // The first line continues the cursor's own line, so it has no indentation of
-  // its own. From the second onwards, dedenting back to the cursor's level means
-  // we have left the block and started a sibling.
-  let end = lines.length;
-  for (let i = 1; i < lines.length; i += 1) {
-    if (!lines[i].trim()) continue;
-    if (indentWidth(lines[i], tabSize) <= baseIndent) {
-      end = i;
-      break;
-    }
-  }
-  // Blank lines that merely separated us from the sibling we just cut.
-  while (end > 1 && !lines[end - 1].trim()) end -= 1;
-  let trimmed = lines.slice(0, end).join('\n');
-
-  // Still too long: fall back to the last blank line that fits.
-  if (trimmed.split('\n').length > lineLimit) {
-    for (const match of [...trimmed.matchAll(/\r?\n\s*\r?\n/g)].reverse()) {
-      const candidate = trimmed.slice(0, match.index);
-      if (candidate.split('\n').length <= lineLimit) {
-        trimmed = candidate;
-        break;
-      }
-    }
-  }
-
-  // Hard cap.
-  const capped = trimmed.split('\n');
-  if (capped.length > lineLimit) trimmed = capped.slice(0, lineLimit).join('\n');
-
-  // Never hand back nothing; a bad trim is worse than no trim.
-  return trimmed.trim() ? trimmed : lines[0];
+  return lines.length <= lineLimit ? completion : lines.slice(0, lineLimit).join('\n');
 }
 
 /**
@@ -137,10 +111,12 @@ function delay(ms: number, token: vscode.CancellationToken): Promise<void> {
 
 export class DeepSeekInlineCompletionProvider implements vscode.InlineCompletionItemProvider {
   private readonly authManager: AuthManager;
+  private readonly extensionUri: vscode.Uri;
   private warnedAboutMissingKey = false;
 
-  constructor(authManager: AuthManager) {
+  constructor(authManager: AuthManager, extensionUri: vscode.Uri) {
     this.authManager = authManager;
+    this.extensionUri = extensionUri;
   }
 
   async provideInlineCompletionItems(
@@ -172,8 +148,10 @@ export class DeepSeekInlineCompletionProvider implements vscode.InlineCompletion
 
     const offset = document.offsetAt(position);
     const fullText = document.getText();
-    const prefix = fullText.slice(Math.max(0, offset - MAX_PREFIX_CHARS), offset);
+    const windowStart = anchoredPrefixStart(offset);
     const suffix = fullText.slice(offset, offset + MAX_SUFFIX_CHARS);
+
+    const prefix = fullText.slice(windowStart, offset);
 
     if (!prefix.trim()) return undefined;
 
@@ -188,22 +166,38 @@ export class DeepSeekInlineCompletionProvider implements vscode.InlineCompletion
 
     if (!completion || token.isCancellationRequested) return undefined;
 
+    // The model often ends a suggestion with newlines. Accepting that inserts blank
+    // lines, and the newline the user then types adds another. separateFromSuffix
+    // puts one back only in the narrow case where it is needed to avoid a weld.
+    const trimmedTail = unweldBraces(completion).replace(/\s+$/, '');
+    if (!trimmedTail) return undefined;
+
     const editorOptions = vscode.window.visibleTextEditors.find(
       (editor) => editor.document === document,
     )?.options;
-    const tabSize = typeof editorOptions?.tabSize === 'number' ? editorOptions.tabSize : 4;
 
-    const indented = normalizeIndent(completion, {
+    const indented = normalizeIndent(trimmedTail, {
       insertSpaces:
         typeof editorOptions?.insertSpaces === 'boolean' ? editorOptions.insertSpaces : undefined,
       tabSize: typeof editorOptions?.tabSize === 'number' ? editorOptions.tabSize : undefined,
     });
 
-    const trimmed = trimToBlock(
+    // Where a grammar is vendored the block boundary comes from the parse tree.
+    // Where it is not, the suggestion is simply left whole rather than guessed at.
+    const astTrimmed = await trimToBlockWithTreeSitter(
+      document.languageId,
+      prefix,
       indented,
-      indentWidth(document.lineAt(position.line).text, tabSize),
+      (name) =>
+        Promise.resolve(
+          vscode.workspace.fs.readFile(vscode.Uri.joinPath(this.extensionUri, 'wasm', name)),
+        ),
+    );
+    if (token.isCancellationRequested) return undefined;
+
+    const trimmed = capLines(
+      astTrimmed ?? indented,
       config.get<number>('inlineCompletion.maxLines', 10),
-      tabSize,
     );
 
     return [

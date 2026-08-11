@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+  # Lets a release be cut without touching the version, and makes a "why did
+  # nothing publish?" run reproducible by hand.
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Create a release even if the version tag already exists'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -18,10 +26,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 'lts/*'
           cache: 'npm'
@@ -32,55 +40,85 @@ jobs:
       - name: Build (TypeScript)
         run: npm run compile
 
-      - name: Determine VSIX filename and package version
+      - name: Lint
+        run: npm run lint
+
+      - name: Determine VSIX filenames and version
         id: vsix-info
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            const name = `${pkg.name}-${pkg.version}.vsix`;
-            fs.appendFileSync(process.env['GITHUB_OUTPUT'], `name=${name}\n`);
-            fs.appendFileSync(process.env['GITHUB_OUTPUT'], `version=${pkg.version}\n`);
+            core.setOutput('name', `${pkg.name}-${pkg.version}.vsix`);
+            core.setOutput('nes_name', `${pkg.name}-${pkg.version}-nes.vsix`);
+            core.setOutput('version', pkg.version);
+            core.setOutput('id', `${pkg.publisher}.${pkg.name}`);
 
       - name: Package extension (.vsix)
-        run: npx -y vsce package -o "${{ steps.vsix-info.outputs.name }}"
+        run: npx --no-install vsce package --no-git-tag-version -o "${{ steps.vsix-info.outputs.name }}"
 
-      - name: Check if release tag exists
-        id: check_tag
+      # Sideload-only twin. Declares `enabledApiProposals`, which vsce refuses to
+      # publish, so this can never become the Marketplace artifact.
+      - name: Package proposed-API variant (.vsix)
+        run: npm run package:proposed
+
+      # package:proposed mutates package.json and restores it in a finally. If that
+      # ever fails, a later publish would ship an unpublishable manifest. Assert it.
+      - name: Verify manifest was restored
         run: |
-          if git ls-remote --tags origin "refs/tags/v${{ steps.vsix-info.outputs.version }}" | grep -q .; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          if node -e "process.exit(require('./package.json').enabledApiProposals ? 1 : 0)"; then
+            echo "manifest clean"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::error::package.json still declares enabledApiProposals; refusing to continue"
+            exit 1
+          fi
+          test -f "${{ steps.vsix-info.outputs.nes_name }}"
+
+      - name: Upload VSIX artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: vsix-${{ steps.vsix-info.outputs.version }}
+          path: |
+            ${{ steps.vsix-info.outputs.name }}
+            ${{ steps.vsix-info.outputs.nes_name }}
+          if-no-files-found: error
+
+      - name: Decide whether to release
+        id: gate
+        run: |
+          VERSION="${{ steps.vsix-info.outputs.version }}"
+          if [ "${{ github.event.inputs.force_release }}" = "true" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Forced release of v$VERSION."
+          elif git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag v$VERSION already exists, so no release was created. Bump \"version\" in package.json, or re-run this workflow with force_release. The VSIX files are still attached as workflow artifacts."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Releasing v$VERSION."
           fi
 
-      - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.vsix-info.outputs.name }}
-          path: ${{ steps.vsix-info.outputs.name }}
-
       - name: Create GitHub Release
-        id: create_release
-        if: steps.check_tag.outputs.exists == 'false'
-        uses: actions/create-release@v1
+        if: steps.gate.outputs.release == 'true'
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.vsix-info.outputs.version }}
-          release_name: Release v${{ steps.vsix-info.outputs.version }}
-          body: "Automated release packaged by CI"
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: Release v${{ steps.vsix-info.outputs.version }}
+          files: |
+            ${{ steps.vsix-info.outputs.name }}
+            ${{ steps.vsix-info.outputs.nes_name }}
+          fail_on_unmatched_files: true
+          body: |
+            Automated release packaged by CI.
 
-      - name: Upload VSIX to Release
-        if: steps.check_tag.outputs.exists == 'false'
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.vsix-info.outputs.name }}
-          asset_name: ${{ steps.vsix-info.outputs.name }}
-          asset_content_type: application/octet-stream
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            | File | Use |
+            |---|---|
+            | `${{ steps.vsix-info.outputs.name }}` | Install this one. |
+            | `${{ steps.vsix-info.outputs.nes_name }}` | Proposed APIs (`inlineCompletionsAdditions`). Sideload only, never published to the Marketplace. |
+
+            The `-nes` build additionally needs this in `~/.vscode/argv.json`, which survives restarts:
+
+            ```json
+            { "enable-proposed-api": ["${{ steps.vsix-info.outputs.id }}"] }
+            ```

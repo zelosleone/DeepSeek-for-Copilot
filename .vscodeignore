@@ -1,5 +1,7 @@
 src/**
 node_modules/**
+!node_modules/web-tree-sitter/**
+node_modules/web-tree-sitter/debug/**
 *.ts
 !*.d.ts
 tsconfig.json
