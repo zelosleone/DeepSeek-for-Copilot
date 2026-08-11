@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { AuthManager } from './auth.js';
+import { DeepSeekInlineCompletionProvider } from './fim.js';
 import { logger } from './logger.js';
 import { DeepSeekChatProvider, type SessionUsageInfo } from './provider/index.js';
 
@@ -56,7 +58,22 @@ export function activate(context: vscode.ExtensionContext) {
       ),
       vscode.commands.registerCommand('deepseek.clearApiKey', () => provider.clearApiKey()),
       vscode.commands.registerCommand('deepseek.showLogs', () => logger.show()),
+      vscode.commands.registerCommand('deepseek.toggleInlineCompletion', async () => {
+        const config = vscode.workspace.getConfiguration('deepseek');
+        const enabled = !config.get<boolean>('inlineCompletion.enabled', false);
+        await config.update('inlineCompletion.enabled', enabled, true);
+        vscode.window.showInformationMessage(
+          `DeepSeek inline completion ${enabled ? 'enabled' : 'disabled'}.`,
+        );
+      }),
+      vscode.commands.registerCommand('deepseek.openSettings', () =>
+        vscode.commands.executeCommand('workbench.action.openSettings', 'deepseek.'),
+      ),
       vscode.lm.registerLanguageModelChatProvider('deepseek', provider),
+      vscode.languages.registerInlineCompletionItemProvider(
+        { pattern: '**' },
+        new DeepSeekInlineCompletionProvider(new AuthManager(context)),
+      ),
     );
 
     logger.info('Extension activated');

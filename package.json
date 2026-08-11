@@ -1,8 +1,8 @@
 {
   "name": "copilot-vscode-deepseek",
   "displayName": "DeepSeek for Copilot",
-  "description": "Use DeepSeek V4 models in VS Code Copilot Chat with thinking effort presets & temperature presets",
-  "version": "0.5.1",
+  "description": "Use DeepSeek V4 models in VS Code Copilot Chat with thinking effort presets & temperature presets, plus DeepSeek FIM inline completion",
+  "version": "0.8.1",
   "type": "module",
   "publisher": "DenizhanDaklr",
   "repository": {
@@ -12,7 +12,7 @@
   "icon": "images/Deepseek-Logo-Icon-PNG.png",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.118.0"
+    "vscode": "^1.125.0"
   },
   "categories": [
     "AI",
@@ -41,7 +41,21 @@
     "languageModelChatProviders": [
       {
         "vendor": "deepseek",
-        "displayName": "DeepSeek"
+        "displayName": "DeepSeek",
+        "configuration": {
+          "type": "object",
+          "properties": {
+            "apiKey": {
+              "type": "string",
+              "secret": true,
+              "description": "API key for DeepSeek",
+              "title": "API Key"
+            }
+          },
+          "required": [
+            "apiKey"
+          ]
+        }
       }
     ],
     "commands": [
@@ -60,6 +74,14 @@
       {
         "command": "deepseek.showLogs",
         "title": "DeepSeek: Show Logs"
+      },
+      {
+        "command": "deepseek.toggleInlineCompletion",
+        "title": "DeepSeek: Toggle Inline Completion"
+      },
+      {
+        "command": "deepseek.openSettings",
+        "title": "DeepSeek: Open Settings"
       }
     ],
     "configuration": {
@@ -82,7 +104,44 @@
         "deepseek.baseUrl": {
           "type": "string",
           "default": "https://api.deepseek.com",
-          "description": "DeepSeek API base URL",
+          "description": "DeepSeek API base URL. Inline completion appends /beta/completions to this.",
+          "scope": "application"
+        },
+        "deepseek.inlineCompletion.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Suggest inline code completions using DeepSeek FIM. Disable GitHub Copilot's own inline suggestions first, otherwise both providers compete for the same suggestions.",
+          "scope": "application"
+        },
+        "deepseek.inlineCompletion.model": {
+          "type": "string",
+          "default": "deepseek-v4-flash",
+          "enum": [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro"
+          ],
+          "description": "Model used for inline completion. Flash is roughly 400ms faster per request.",
+          "scope": "application"
+        },
+        "deepseek.inlineCompletion.debounceMs": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "Idle time before a completion request is sent. Lower values cost more requests.",
+          "scope": "application"
+        },
+        "deepseek.inlineCompletion.maxTokens": {
+          "type": "number",
+          "default": 128,
+          "minimum": 1,
+          "description": "Maximum tokens per inline completion.",
+          "scope": "application"
+        },
+        "deepseek.inlineCompletion.maxLines": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "description": "Maximum lines per inline completion. Suggestions are also cut where they leave the block they started in.",
           "scope": "application"
         }
       }
@@ -97,14 +156,14 @@
     "package": "vsce package"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.3.11",
-    "@types/node": "20.19.30",
-    "@types/vscode": "^1.118.0",
-    "@typescript-eslint/eslint-plugin": "8.53.0",
-    "@typescript-eslint/parser": "8.53.0",
-    "@vscode/vsce": "^2.25.0",
+    "@biomejs/biome": "^2.5.7",
+    "@types/node": "^26.2.0",
+    "@types/vscode": "^1.125.0",
+    "@typescript-eslint/eslint-plugin": "^8.67.0",
+    "@typescript-eslint/parser": "^8.67.0",
+    "@vscode/vsce": "^3.9.2",
     "eslint": "9.39.2",
-    "globals": "17.0.0",
+    "globals": "^17.9.0",
     "typescript": "5.9.3"
   }
 }

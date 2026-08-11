@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AuthManager } from '../auth.js';
+import { AuthManager, setProviderConfiguredApiKey } from '../auth.js';
 import { DeepSeekClient, type DeepSeekToolCall, type DeepSeekUsage } from '../deepseekClient.js';
 import { logger } from '../logger.js';
 import {
@@ -11,8 +11,9 @@ import {
   getMessageText,
   normalizeTemperatureValue,
 } from './convert.js';
+import { captureShape, describeShapeChange, type PrefixShape } from './cacheShape.js';
+import { createReasoningMarkerPart } from './replay.js';
 import {
-  API_KEY_REQUIRED_DETAIL,
   MODEL_CONFIGURATION_SCHEMA,
   MODELS,
   type ModelConfigurationOptions,
@@ -20,8 +21,6 @@ import {
   type ModelPickerChatInformation,
   REASONING_HISTORY_STORAGE_KEY,
   type ReasoningEffort,
-  type ReasoningEntry,
-  type ReasoningHistoryState,
 } from './schema.js';
 
 export interface SessionUsageInfo {
@@ -30,9 +29,28 @@ export interface SessionUsageInfo {
   generationId: number;
 }
 
+/**
+ * `configuration` is part of the proposed chatProvider API, so it is absent from the
+ * stable typings. VS Code populates it at runtime once the provider declares a
+ * `configuration` schema in its `languageModelChatProviders` contribution.
+ */
+type PrepareOptionsWithConfiguration = vscode.PrepareLanguageModelChatModelOptions & {
+  readonly configuration?: { readonly apiKey?: string };
+};
+
+/**
+ * VS Code hands the model object back to us on each request, so the key rides
+ * along on it. Mirroring it into secret storage instead would make the ungrouped
+ * code path serve models as well, registering every model twice: once as
+ * `deepseek/<id>` and once as `deepseek/<group>/<id>`.
+ */
+type ModelWithApiKey = ModelPickerChatInformation & {
+  readonly isBYOK?: boolean;
+  readonly apiKey?: string;
+};
+
 export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private static nextGenerationId = 0;
-  private readonly context: vscode.ExtensionContext;
   private readonly authManager: AuthManager;
   private readonly onUsage?: (info: SessionUsageInfo) => void;
   private readonly onDidChangeLanguageModelChatInformationEmitter = new vscode.EventEmitter<void>();
@@ -40,20 +58,16 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   readonly onDidChangeLanguageModelChatInformation =
     this.onDidChangeLanguageModelChatInformationEmitter.event;
 
-  private readonly reasoningCache: Map<number, ReasoningEntry>;
-  private nextReasoningTurnIndex: number;
   private charsPerToken = 4.0;
+  private lastPrefixShape: PrefixShape | undefined;
 
   constructor(context: vscode.ExtensionContext, onUsage?: (info: SessionUsageInfo) => void) {
-    this.context = context;
     this.authManager = new AuthManager(context);
     this.onUsage = onUsage;
 
-    const persisted = context.workspaceState.get<ReasoningHistoryState>(
-      REASONING_HISTORY_STORAGE_KEY,
-    );
-    this.reasoningCache = new Map(persisted?.entries ?? []);
-    this.nextReasoningTurnIndex = persisted?.nextReasoningTurnIndex ?? this.reasoningCache.size;
+    // Reasoning used to live in a provider-global map persisted here, which leaked
+    // between chat sessions (#10). It now travels with the conversation instead.
+    void context.workspaceState.update(REASONING_HISTORY_STORAGE_KEY, undefined);
 
     context.subscriptions.push(
       this.onDidChangeLanguageModelChatInformationEmitter,
@@ -134,11 +148,29 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   }
 
   async provideLanguageModelChatInformation(
-    _options: vscode.PrepareLanguageModelChatModelOptions,
+    options: vscode.PrepareLanguageModelChatModelOptions,
     _token: vscode.CancellationToken,
   ): Promise<vscode.LanguageModelChatInformation[]> {
-    const hasKey = await this.authManager.hasApiKey();
-    return MODELS.map((model) => toChatInfo(model, hasKey));
+    // Set through Add Models, VS Code collects the key against our `configuration`
+    // contribution and passes it here (#14). Falling back to secret storage covers
+    // users who configured via the "DeepSeek: Set API Key" command instead.
+    let apiKey = (options as PrepareOptionsWithConfiguration).configuration?.apiKey;
+    apiKey ||= await this.authManager.getApiKey();
+
+    // Nothing to advertise without a key. VS Code calls us with silent=false when
+    // the user is actively setting the provider up, which is when we may prompt.
+    if (!apiKey) {
+      if (options.silent) return [];
+      if (!(await this.authManager.promptForApiKey())) return [];
+      apiKey = await this.authManager.getApiKey();
+      if (!apiKey) return [];
+    }
+
+    // Inline completion is not a chat provider, so VS Code never hands it the
+    // configured key. Share it rather than persisting a second copy.
+    setProviderConfiguredApiKey(apiKey);
+
+    return MODELS.map((model) => withApiKey(toChatInfo(model), apiKey));
   }
 
   async provideLanguageModelChatResponse(
@@ -148,7 +180,9 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken,
   ): Promise<void> {
-    const apiKey = await this.authManager.getApiKey();
+    // The key rides on the model we handed back from provideLanguageModelChatInformation;
+    // storage is only the fallback for command-configured users.
+    const apiKey = (modelInfo as ModelWithApiKey).apiKey ?? (await this.authManager.getApiKey());
     if (!apiKey) {
       throw new Error(
         'DeepSeek API key not configured. Run "DeepSeek: Set API Key" from the Command Palette.',
@@ -166,15 +200,15 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     const thinkingEffort = getConfiguredThinkingEffort(modelConfig);
     const temperature = getConfiguredTemperature(modelConfig);
 
-    if (messages.length <= 2) {
-      this.reasoningCache.clear();
-      this.nextReasoningTurnIndex = 0;
-      void this.persistReasoningHistory();
-    }
-
-    const deepseekMessages = convertMessages(messages, isThinkingModel, this.reasoningCache);
+    const deepseekMessages = convertMessages(messages, isThinkingModel);
     const tools = modelDef.capabilities.toolCalling ? convertTools(options.tools) : undefined;
     const totalRequestChars = countMessageChars(deepseekMessages);
+
+    const prefixShape = captureShape(deepseekMessages, tools);
+    const shapeChanges = this.lastPrefixShape
+      ? describeShapeChange(this.lastPrefixShape, prefixShape)
+      : [];
+    this.lastPrefixShape = prefixShape;
 
     const thinkingParams = isThinkingModel
       ? {
@@ -234,12 +268,13 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
           },
 
           onDone: () => {
-            this.reasoningCache.set(this.nextReasoningTurnIndex, {
-              text: isThinkingModel ? accumulatedReasoning : '',
-              timestamp: Date.now(),
-            });
-            this.nextReasoningTurnIndex += 1;
-            void this.persistReasoningHistory();
+            if (isThinkingModel && accumulatedReasoning) {
+              progress.report(
+                createReasoningMarkerPart(
+                  accumulatedReasoning,
+                ) as unknown as vscode.LanguageModelResponsePart,
+              );
+            }
             resolve();
           },
 
@@ -257,9 +292,13 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
             logger.info(
               `[${sessionId}] tokens: context=${usage.prompt_tokens} completion=${usage.completion_tokens}` +
                 ` | cache: hit=${cacheHit} miss=${cacheMiss} rate=${hitRate}` +
-                ` | temp=${temperature} chars/tok=${this.charsPerToken.toFixed(2)}`,
+                ` | temp=${temperature} chars/tok=${this.charsPerToken.toFixed(2)}` +
+                (cacheHit === 0 && cacheMiss > 0
+                  ? ` | MISS cause: ${shapeChanges.length ? shapeChanges.join(', ') : 'stable-prefix (tail growth or cache TTL)'}`
+                  : ''),
             );
 
+            reportCopilotContextUsage(progress, usage);
             this.onUsage?.({ sessionId, usage, generationId });
           },
         },
@@ -280,24 +319,51 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
     return Math.max(1, Math.ceil(getMessageText(text).length / this.charsPerToken));
   }
+}
 
-  private persistReasoningHistory(): Thenable<void> {
-    return this.context.workspaceState.update(REASONING_HISTORY_STORAGE_KEY, {
-      nextReasoningTurnIndex: this.nextReasoningTurnIndex,
-      entries: [...this.reasoningCache.entries()],
-    });
+/**
+ * Copilot Chat reads token usage off a data part with this MIME to drive the
+ * context-window indicator. Without it the indicator never moves for a
+ * third-party provider, and the chat is never summarised (#3).
+ */
+const COPILOT_USAGE_DATA_PART_MIME = 'usage';
+
+function reportCopilotContextUsage(
+  progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+  usage: DeepSeekUsage,
+): void {
+  const data = {
+    prompt_tokens: usage.prompt_tokens,
+    completion_tokens: usage.completion_tokens,
+    total_tokens: usage.total_tokens,
+    prompt_tokens_details: {
+      cached_tokens: usage.prompt_cache_hit_tokens ?? 0,
+    },
+  };
+
+  try {
+    progress.report(
+      new vscode.LanguageModelDataPart(
+        new TextEncoder().encode(JSON.stringify(data)),
+        COPILOT_USAGE_DATA_PART_MIME,
+      ) as unknown as vscode.LanguageModelResponsePart,
+    );
+  } catch (error) {
+    logger.warn('Failed to report context usage', error);
   }
 }
 
-function toChatInfo(m: ModelDefinition, hasApiKey: boolean): ModelPickerChatInformation {
+function withApiKey(info: ModelPickerChatInformation, apiKey: string): ModelWithApiKey {
+  return { ...info, isBYOK: true, apiKey };
+}
+
+function toChatInfo(m: ModelDefinition): ModelPickerChatInformation {
   return {
     id: m.id,
     name: m.name,
     family: m.family,
     version: m.version,
-    detail: hasApiKey ? m.detail : API_KEY_REQUIRED_DETAIL,
-    tooltip: hasApiKey ? undefined : API_KEY_REQUIRED_DETAIL,
-    statusIcon: hasApiKey ? undefined : new vscode.ThemeIcon('warning'),
+    detail: m.detail,
     maxInputTokens: m.maxInputTokens,
     maxOutputTokens: m.maxOutputTokens,
     isUserSelectable: true,

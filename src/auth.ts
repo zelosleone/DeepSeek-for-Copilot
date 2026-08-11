@@ -2,6 +2,16 @@ import * as vscode from 'vscode';
 
 const API_KEY_SECRET = 'deepseek.apiKey';
 
+let providerConfiguredApiKey: string | undefined;
+
+export function setProviderConfiguredApiKey(apiKey: string | undefined): void {
+  providerConfiguredApiKey = apiKey;
+}
+
+export function getProviderConfiguredApiKey(): string | undefined {
+  return providerConfiguredApiKey;
+}
+
 export class AuthManager {
   private readonly secretStorage: vscode.SecretStorage;
   private readonly baseUrl: string;

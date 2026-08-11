@@ -2,11 +2,6 @@ import type * as vscode from 'vscode';
 
 export type ReasoningEffort = 'high' | 'max';
 
-export interface ReasoningEntry {
-  text: string;
-  timestamp: number;
-}
-
 export const MODEL_CONFIGURATION_SCHEMA = {
   properties: {
     reasoningEffort: {
@@ -47,11 +42,6 @@ export const TEMPERATURE_PRESET_VALUES: Record<TemperaturePreset, number> = {
   max: 1.5,
 };
 
-export interface ReasoningHistoryState {
-  nextReasoningTurnIndex: number;
-  entries: Array<[number, ReasoningEntry]>;
-}
-
 export type ModelConfigurationOptions = vscode.ProvideLanguageModelChatResponseOptions & {
   readonly modelConfiguration?: Record<string, unknown>;
   readonly configuration?: Record<string, unknown>;
@@ -59,9 +49,7 @@ export type ModelConfigurationOptions = vscode.ProvideLanguageModelChatResponseO
 
 export type ModelPickerChatInformation = vscode.LanguageModelChatInformation & {
   readonly isUserSelectable: boolean;
-  readonly statusIcon?: vscode.ThemeIcon;
   readonly detail?: string;
-  readonly tooltip?: string;
   readonly configurationSchema?: typeof MODEL_CONFIGURATION_SCHEMA;
 };
 
@@ -114,5 +102,4 @@ export const MODELS: readonly ModelDefinition[] = [
   },
 ];
 
-export const API_KEY_REQUIRED_DETAIL = 'Please run DeepSeek: Set API Key to configure.';
 export const REASONING_HISTORY_STORAGE_KEY = 'deepseek.reasoningHistory';

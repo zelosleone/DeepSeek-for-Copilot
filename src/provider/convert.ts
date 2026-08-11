@@ -1,16 +1,10 @@
 import * as vscode from 'vscode';
 import type { DeepSeekMessage, DeepSeekTool, DeepSeekToolCall } from '../deepseekClient.js';
-import type {
-  ModelConfigurationOptions,
-  ReasoningEntry,
-  TemperaturePreset,
-  ThinkingEffort,
-} from './schema.js';
+import { readReasoningMarker } from './replay.js';
+import type { ModelConfigurationOptions, TemperaturePreset, ThinkingEffort } from './schema.js';
 import { TEMPERATURE_PRESET_VALUES } from './schema.js';
 
-function extractTextFromParts(
-  parts: readonly unknown[],
-): string {
+function extractTextFromParts(parts: readonly unknown[]): string {
   let text = '';
   for (const part of parts) {
     if (part instanceof vscode.LanguageModelTextPart) {
@@ -20,19 +14,15 @@ function extractTextFromParts(
   return text;
 }
 
-export function getMessageText(
-  message: vscode.LanguageModelChatRequestMessage,
-): string {
+export function getMessageText(message: vscode.LanguageModelChatRequestMessage): string {
   return extractTextFromParts(message.content);
 }
 
 export function convertMessages(
   messages: readonly vscode.LanguageModelChatRequestMessage[],
   isThinkingModel: boolean,
-  reasoningCache: Map<number, ReasoningEntry>,
 ): DeepSeekMessage[] {
   const result: DeepSeekMessage[] = [];
-  let assistantTurnIndex = 0;
 
   for (const message of messages) {
     const role = mapRole(message.role);
@@ -59,8 +49,7 @@ export function convertMessages(
     }
 
     if (role === 'assistant') {
-      const reasoningContent = reasoningCache.get(assistantTurnIndex)?.text ?? '';
-      assistantTurnIndex += 1;
+      const reasoningContent = readReasoningMarker(message) ?? '';
 
       if (content || toolCalls.length > 0 || isThinkingModel) {
         const msg: DeepSeekMessage = {
@@ -102,14 +91,27 @@ export function convertTools(
   tools: readonly vscode.LanguageModelChatTool[] | undefined,
 ): DeepSeekTool[] | undefined {
   if (!tools || tools.length === 0) return undefined;
-  return tools.map((tool) => ({
-    type: 'function' as const,
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema as Record<string, unknown> | undefined,
-    },
-  }));
+  return tools
+    .map((tool) => ({
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema as Record<string, unknown> | undefined,
+      },
+    }))
+    // DeepSeek's prompt cache keys on the rendered prefix, and the tool list is
+    // part of it. Copilot gives no ordering guarantee, so an unsorted list lets a
+    // reshuffle invalidate the entire prefix. Ordering after Reasonix's
+    // normalizeToolSchemas: name, then description, then parameters.
+    .sort(
+      (a, b) =>
+        a.function.name.localeCompare(b.function.name) ||
+        (a.function.description ?? '').localeCompare(b.function.description ?? '') ||
+        JSON.stringify(a.function.parameters ?? null).localeCompare(
+          JSON.stringify(b.function.parameters ?? null),
+        ),
+    );
 }
 
 export function countMessageChars(messages: DeepSeekMessage[]): number {
