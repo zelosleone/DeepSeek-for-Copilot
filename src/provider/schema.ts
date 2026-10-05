@@ -1,39 +1,46 @@
 import type * as vscode from 'vscode';
+import { logger } from '../logger.js';
+import {
+  reasoningChoices,
+  reasoningSchema,
+  tokenLimits,
+  type ModelsDevCache,
+  type ModelsDevModel,
+  type ReasoningChoices,
+} from '../modelsDev.js';
 
-export type ReasoningEffort = 'high' | 'max';
+export const MODEL_CATALOG_CACHE_KEY = 'deepseek.modelCatalog.v2';
 
-export const MODEL_CONFIGURATION_SCHEMA = {
-  properties: {
-    reasoningEffort: {
-      type: 'string',
-      title: 'Thinking Effort',
-      enum: ['none', 'high', 'max'],
-      enumItemLabels: ['None', 'High', 'Max'],
-      enumDescriptions: ['No reasoning', 'Balanced', 'Max reasoning'],
-      default: 'high',
-      group: 'navigation',
-    },
-    temperature: {
-      type: 'string',
-      title: 'Temperature',
-      enum: ['balanced', 'precise', 'creative', 'max', 'custom'],
-      enumItemLabels: ['Balanced', 'Precise', 'Creative', 'Max', 'Custom'],
-      enumDescriptions: [
-        'Standard',
-        'Low, good for code',
-        'Higher, good for writing',
-        'Highest, good for creativity',
-        'Custom value set in settings',
-      ],
-      default: 'balanced',
-      description: 'Presets',
-      group: 'navigation',
-    },
-  },
+/** User preference, not model data: merged into each model's live schema. */
+const TEMPERATURE_SCHEMA_PROPERTY = {
+  type: 'string',
+  title: 'Temperature',
+  enum: ['balanced', 'precise', 'creative', 'max', 'custom'],
+  enumItemLabels: ['Balanced', 'Precise', 'Creative', 'Max', 'Custom'],
+  enumDescriptions: [
+    'Standard',
+    'Low, good for code',
+    'Higher, good for writing',
+    'Highest, good for creativity',
+    'Custom value set in settings',
+  ],
+  default: 'balanced',
+  description: 'Presets',
+  group: 'navigation',
 } as const;
 
+/** Live reasoningEffort property plus the temperature preset property. */
+export function buildConfigurationSchema(choices: ReasoningChoices): object {
+  const base = reasoningSchema(choices) as { properties: Record<string, unknown> };
+  return {
+    properties: {
+      ...base.properties,
+      temperature: TEMPERATURE_SCHEMA_PROPERTY,
+    },
+  };
+}
+
 export type TemperaturePreset = 'balanced' | 'precise' | 'creative' | 'max';
-export type ThinkingEffort = 'none' | 'high' | 'max';
 
 export const TEMPERATURE_PRESET_VALUES: Record<TemperaturePreset, number> = {
   balanced: 1.0,
@@ -50,7 +57,7 @@ export type ModelConfigurationOptions = vscode.ProvideLanguageModelChatResponseO
 export type ModelPickerChatInformation = vscode.LanguageModelChatInformation & {
   readonly isUserSelectable: boolean;
   readonly detail?: string;
-  readonly configurationSchema?: typeof MODEL_CONFIGURATION_SCHEMA;
+  readonly configurationSchema?: object;
 };
 
 export interface ModelDefinition {
@@ -65,46 +72,11 @@ export interface ModelDefinition {
   capabilities: {
     toolCalling: boolean;
     imageInput: boolean;
-    thinking: boolean;
   };
+  /** Live reasoning picker choices; absent when the model exposes no reasoning controls. */
+  choices?: ReasoningChoices;
+  configurationSchema?: object;
 }
-
-export const KNOWN_MODELS: readonly ModelDefinition[] = [
-  {
-    id: 'deepseek-v4-flash',
-    apiModel: 'deepseek-v4-flash',
-    name: 'DeepSeek V4 Flash',
-    family: 'deepseek',
-    version: 'v4',
-    detail: 'Cheap and Fast',
-    maxInputTokens: 1048576,
-    maxOutputTokens: 393216,
-    capabilities: {
-      toolCalling: true,
-      imageInput: true,
-      thinking: true,
-    },
-  },
-  {
-    id: 'deepseek-v4-pro',
-    apiModel: 'deepseek-v4-pro',
-    name: 'DeepSeek V4 Pro',
-    family: 'deepseek',
-    version: 'v4',
-    detail: 'Pro version',
-    maxInputTokens: 1048576,
-    maxOutputTokens: 393216,
-    capabilities: {
-      toolCalling: true,
-      imageInput: false,
-      thinking: true,
-    },
-  },
-];
-
-export const REASONING_HISTORY_STORAGE_KEY = 'deepseek.reasoningHistory';
-
-export const MODEL_CATALOG_CACHE_KEY = 'deepseek.modelCatalog.v1';
 
 const NON_CHAT_MODEL_PATTERN = /embed|rerank|moderation|tts|whisper/i;
 
@@ -179,43 +151,54 @@ function positiveNumberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function humanizeModelName(value: string): string {
-  return value
-    .split(/[-_]/)
-    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(' ');
+function includesImage(modalities: readonly string[] | undefined): boolean | undefined {
+  if (!modalities) return undefined;
+  return modalities.some((m) => m.toLowerCase() === 'image');
 }
 
-function inferThinking(id: string): boolean {
-  const lower = id.toLowerCase();
-  if (lower.includes('reasoner') || lower.includes('r1')) return true;
-  if (lower.includes('chat')) return false;
-  return true;
-}
-
-export function resolveModelDefinition(entry: string | LiveModelEntry): ModelDefinition {
-  const live: LiveModelEntry = typeof entry === 'string' ? { id: entry } : entry;
-  const known = KNOWN_MODELS.find((m) => m.id === live.id);
-  // Bare ids fall back to the known table (covers ids the server omits).
-  if (typeof entry === 'string' && known) return known;
-  const displayName =
-    live.name && live.name.trim() ? humanizeModelName(live.name.trim()) : humanizeModelName(live.id);
+/**
+ * A live id becomes a model only when a context window and an output limit are
+ * known: the provider's own /models fields first, models.dev second. Ids with
+ * neither are skipped, never invented.
+ */
+export function resolveModelDefinition(
+  live: LiveModelEntry,
+  dev: ModelsDevModel | null | undefined,
+): ModelDefinition | undefined {
+  const context =
+    positiveNumberOrUndefined(live.context_window) ??
+    positiveNumberOrUndefined(dev?.limit?.context);
+  const output =
+    positiveNumberOrUndefined(live.max_output_tokens) ??
+    positiveNumberOrUndefined(dev?.limit?.output);
+  if (context === undefined || output === undefined) {
+    logger.warn(
+      `Skipping DeepSeek model ${live.id}: no context/output limit from live or models.dev data`,
+    );
+    return undefined;
+  }
+  const limits = tokenLimits(context, output);
+  const choices = reasoningChoices(
+    dev?.reasoning_options,
+    live.effort
+      ? { levels: live.effort.supported_levels, defaultLevel: live.effort.default_level }
+      : undefined,
+  );
   return {
     id: live.id,
     apiModel: live.id,
-    name: displayName,
+    name: live.name?.trim() || dev?.name || live.id,
     family: 'deepseek',
-    version: known?.version ?? (live.id.startsWith('deepseek-') ? live.id.slice('deepseek-'.length) : live.id),
-    detail: known?.detail ?? 'DeepSeek',
-    maxInputTokens:
-      positiveNumberOrUndefined(live.context_window) ?? known?.maxInputTokens ?? 131072,
-    maxOutputTokens:
-      positiveNumberOrUndefined(live.max_output_tokens) ?? known?.maxOutputTokens ?? 32768,
+    version: live.id.startsWith('deepseek-') ? live.id.slice('deepseek-'.length) : live.id,
+    detail: 'DeepSeek',
+    maxInputTokens: limits.maxInputTokens,
+    maxOutputTokens: limits.maxOutputTokens,
     capabilities: {
-      toolCalling: true,
-      imageInput: live.input_modalities?.some((m) => m.toLowerCase() === 'image') ?? false,
-      thinking: live.effort !== undefined && live.effort !== null ? true : inferThinking(live.id),
+      toolCalling: dev?.tool_call !== false,
+      imageInput:
+        includesImage(live.input_modalities) ?? includesImage(dev?.modalities?.input) ?? false,
     },
+    ...(choices ? { choices, configurationSchema: buildConfigurationSchema(choices) } : {}),
   };
 }
 
@@ -231,19 +214,18 @@ export function parseModelListResponse(body: unknown): LiveModelEntry[] {
   return entries;
 }
 
-export function resolveModelCatalog(entries: readonly LiveModelEntry[]): ModelDefinition[] {
+/** Live ids only: no hardcoded tables, no fallback merge. */
+export function resolveModelCatalog(
+  entries: readonly LiveModelEntry[],
+  devCache: ModelsDevCache | undefined,
+): ModelDefinition[] {
   const seen = new Set<string>();
   const catalog: ModelDefinition[] = [];
   for (const entry of entries) {
     if (!entry.id || seen.has(entry.id) || !isChatModelId(entry.id)) continue;
     seen.add(entry.id);
-    catalog.push(resolveModelDefinition(entry));
-  }
-  for (const known of KNOWN_MODELS) {
-    if (!seen.has(known.id)) {
-      seen.add(known.id);
-      catalog.push(known);
-    }
+    const definition = resolveModelDefinition(entry, devCache?.models[entry.id]);
+    if (definition) catalog.push(definition);
   }
   return catalog;
 }

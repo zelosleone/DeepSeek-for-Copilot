@@ -3,27 +3,29 @@ import { AuthManager, setProviderConfiguredApiKey } from '../auth.js';
 import { DeepSeekClient, type DeepSeekToolCall, type DeepSeekUsage } from '../deepseekClient.js';
 import { logger } from '../logger.js';
 import {
+  reasoningRequestFields,
+  resolveModelsDev,
+  resolveReasoningChoice,
+  type ModelsDevCache,
+} from '../modelsDev.js';
+import {
   convertMessages,
   convertTools,
-  countMessageChars,
+  countConvertedMessageChars,
+  countRequestChars,
   getConfiguredTemperature,
-  getConfiguredThinkingEffort,
-  getMessageText,
   normalizeTemperatureValue,
 } from './convert.js';
 import { captureShape, describeShapeChange, type PrefixShape } from './cacheShape.js';
 import { createReasoningMarkerPart } from './replay.js';
 import {
-  KNOWN_MODELS,
+  buildConfigurationSchema,
   MODEL_CATALOG_CACHE_KEY,
-  MODEL_CONFIGURATION_SCHEMA,
   parseModelListResponse,
   resolveModelCatalog,
   type ModelConfigurationOptions,
   type ModelDefinition,
   type ModelPickerChatInformation,
-  REASONING_HISTORY_STORAGE_KEY,
-  type ReasoningEffort,
 } from './schema.js';
 
 export interface SessionUsageInfo {
@@ -46,11 +48,23 @@ type PrepareOptionsWithConfiguration = vscode.PrepareLanguageModelChatModelOptio
  * along on it. Mirroring it into secret storage instead would make the ungrouped
  * code path serve models as well, registering every model twice: once as
  * `deepseek/<id>` and once as `deepseek/<group>/<id>`.
+ *
+ * `isBYOK` and `maxContextWindowTokens` are part of the proposed chatProvider API
+ * and absent from the stable typings, hence the cast-like extension here.
  */
 type ModelWithApiKey = ModelPickerChatInformation & {
   readonly isBYOK?: boolean;
+  readonly maxContextWindowTokens?: number;
   readonly apiKey?: string;
 };
+
+const CHARS_PER_TOKEN_KEY = 'deepseek.charsPerToken';
+
+function clampCharsPerToken(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(12, Math.max(1, value))
+    : 4.0;
+}
 
 export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private static nextGenerationId = 0;
@@ -65,6 +79,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private lastPrefixShape: PrefixShape | undefined;
   private readonly extensionContext: vscode.ExtensionContext;
   private availableModels: ModelDefinition[];
+  private devCache: ModelsDevCache | undefined;
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
   private disposed = false;
 
@@ -72,26 +87,30 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     this.authManager = new AuthManager(context);
     this.onUsage = onUsage;
     this.extensionContext = context;
-    this.availableModels = loadCachedCatalog(context);
+    this.charsPerToken = clampCharsPerToken(context.globalState.get(CHARS_PER_TOKEN_KEY));
+    const cached = loadCachedState(context);
+    this.availableModels = cached.models;
+    this.devCache = cached.devCache;
     void this.refreshModels();
     this.refreshTimer = setInterval(() => {
       void this.refreshModels();
     }, 30 * 60 * 1000);
     if (typeof this.refreshTimer.unref === 'function') this.refreshTimer.unref();
 
-    // Reasoning used to live in a provider-global map persisted here, which leaked
-    // between chat sessions (#10). It now travels with the conversation instead.
-    void context.workspaceState.update(REASONING_HISTORY_STORAGE_KEY, undefined);
-
     context.subscriptions.push(
       this.onDidChangeLanguageModelChatInformationEmitter,
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('deepseek.apiKey')) {
+        if (
+          e.affectsConfiguration('deepseek.apiKey') ||
+          e.affectsConfiguration('deepseek.baseUrl')
+        ) {
+          void this.refreshModels();
           this.onDidChangeLanguageModelChatInformationEmitter.fire();
         }
       }),
       context.secrets.onDidChange((e) => {
         if (e.key === 'deepseek.apiKey') {
+          void this.refreshModels();
           this.onDidChangeLanguageModelChatInformationEmitter.fire();
         }
       }),
@@ -116,20 +135,39 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
       const baseUrl = this.authManager.getBaseUrl().replace(/\/+$/, '');
       const response = await fetch(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(20_000),
       });
       if (!response.ok) return;
       const body: unknown = await response.json();
-      const merged = resolveModelCatalog(parseModelListResponse(body));
-      const previousIds = this.availableModels.map((m) => m.id).join('\n');
-      const nextIds = merged.map((m) => m.id).join('\n');
+      const entries = parseModelListResponse(body);
+      let devCache: ModelsDevCache;
+      try {
+        devCache = await resolveModelsDev(
+          baseUrl,
+          entries.map((e) => e.id),
+          this.devCache,
+        );
+      } catch {
+        // models.dev unreachable: keep the previous catalog, do not invent data.
+        return;
+      }
+      const merged = resolveModelCatalog(entries, devCache);
+      this.devCache = devCache;
+      if (JSON.stringify(merged) === JSON.stringify(this.availableModels)) {
+        // Nothing changed: persist the revalidated devCache but keep serving the
+        // identical model-info (and schema) objects.
+        await this.extensionContext.globalState.update(MODEL_CATALOG_CACHE_KEY, {
+          devCache,
+          models: this.availableModels,
+        });
+        return;
+      }
       this.availableModels = merged;
       await this.extensionContext.globalState.update(MODEL_CATALOG_CACHE_KEY, {
-        savedAt: Date.now(),
+        devCache,
         models: merged,
       });
-      if (previousIds !== nextIds) {
-        this.onDidChangeLanguageModelChatInformationEmitter.fire();
-      }
+      this.onDidChangeLanguageModelChatInformationEmitter.fire();
     } catch {
       // Offline or transient failure: keep serving the cached catalog.
     }
@@ -225,7 +263,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     // configured key. Share it rather than persisting a second copy.
     setProviderConfiguredApiKey(apiKey);
 
-    return this.availableModels.map((model) => withApiKey(toChatInfo(model), apiKey));
+    return this.availableModels.map((model) => withApiKey(toChatInfo(model), model, apiKey));
   }
 
   async provideLanguageModelChatResponse(
@@ -250,31 +288,23 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     const modelDef = this.availableModels.find((m) => m.id === modelInfo.id);
     if (!modelDef) throw new Error(`Unknown DeepSeek model: ${modelInfo.id}`);
 
-    const isThinkingModel = modelDef.capabilities.thinking;
     const modelConfig = options as ModelConfigurationOptions;
-    const thinkingEffort = getConfiguredThinkingEffort(modelConfig);
+    const reasoningValue = resolveReasoningChoice(
+      modelDef.choices,
+      modelConfig.modelConfiguration?.reasoningEffort ?? modelConfig.configuration?.reasoningEffort,
+    );
+    const includeReasoning = reasoningValue !== undefined && reasoningValue !== 'off';
     const temperature = getConfiguredTemperature(modelConfig);
 
-    const deepseekMessages = convertMessages(messages, isThinkingModel);
+    const deepseekMessages = convertMessages(messages, includeReasoning);
     const tools = modelDef.capabilities.toolCalling ? convertTools(options.tools) : undefined;
-    const totalRequestChars = countMessageChars(deepseekMessages);
+    const totalRequestChars = countRequestChars(deepseekMessages, tools);
 
     const prefixShape = captureShape(deepseekMessages, tools);
     const shapeChanges = this.lastPrefixShape
       ? describeShapeChange(this.lastPrefixShape, prefixShape)
       : [];
     this.lastPrefixShape = prefixShape;
-
-    const thinkingParams = isThinkingModel
-      ? {
-          thinking: {
-            type: thinkingEffort === 'none' ? ('disabled' as const) : ('enabled' as const),
-          },
-          ...(thinkingEffort === 'none'
-            ? {}
-            : { reasoning_effort: thinkingEffort as ReasoningEffort }),
-        }
-      : {};
 
     const sessionId = crypto.randomUUID();
     const generationId = DeepSeekChatProvider.nextGenerationId++;
@@ -289,7 +319,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
           temperature,
           tools,
           tool_choice: tools && tools.length > 0 ? 'auto' : undefined,
-          ...thinkingParams,
+          ...reasoningRequestFields(reasoningValue, 'enabled'),
         },
         {
           onContent: (content: string) => {
@@ -323,7 +353,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
           },
 
           onDone: () => {
-            if (isThinkingModel && accumulatedReasoning) {
+            if (includeReasoning && accumulatedReasoning) {
               progress.report(
                 createReasoningMarkerPart(
                   accumulatedReasoning,
@@ -335,8 +365,15 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
           onUsage: (usage: DeepSeekUsage) => {
             if (totalRequestChars > 0 && usage.prompt_tokens > 0) {
-              const observedRatio = totalRequestChars / usage.prompt_tokens;
+              const observedRatio = Math.min(
+                12,
+                Math.max(1, totalRequestChars / usage.prompt_tokens),
+              );
               this.charsPerToken = this.charsPerToken * 0.7 + observedRatio * 0.3;
+              void this.extensionContext.globalState.update(
+                CHARS_PER_TOKEN_KEY,
+                this.charsPerToken,
+              );
             }
 
             const cacheHit = usage.prompt_cache_hit_tokens ?? 0;
@@ -368,45 +405,73 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     _token: vscode.CancellationToken,
   ): Promise<number> {
     if (typeof text === 'string') {
-      return Math.max(1, Math.ceil(text.length / this.charsPerToken));
+      return Math.max(1, Math.round(text.length / this.charsPerToken));
     }
     if (!text?.content || !Array.isArray(text.content)) return 1;
 
-    return Math.max(1, Math.ceil(getMessageText(text).length / this.charsPerToken));
+    return Math.max(1, Math.round(countConvertedMessageChars(text) / this.charsPerToken));
   }
+}
+
+function isValidReasoningChoices(value: unknown): value is ModelDefinition['choices'] {
+  if (!value || typeof value !== 'object') return false;
+  const choices = value as Record<string, unknown>;
+  return (
+    Array.isArray(choices['values']) &&
+    choices['values'].length > 0 &&
+    choices['values'].every((v) => typeof v === 'string') &&
+    typeof choices['defaultValue'] === 'string'
+  );
 }
 
 function isValidModelDefinition(value: unknown): value is ModelDefinition {
   if (!value || typeof value !== 'object') return false;
   const m = value as Record<string, unknown>;
-  return (
-    typeof m['id'] === 'string' &&
-    typeof m['apiModel'] === 'string' &&
-    typeof m['name'] === 'string' &&
-    typeof m['family'] === 'string' &&
-    typeof m['version'] === 'string' &&
-    typeof m['maxInputTokens'] === 'number' &&
-    typeof m['maxOutputTokens'] === 'number' &&
-    !!m['capabilities'] &&
-    typeof (m['capabilities'] as Record<string, unknown>)['toolCalling'] === 'boolean' &&
-    typeof (m['capabilities'] as Record<string, unknown>)['imageInput'] === 'boolean' &&
-    typeof (m['capabilities'] as Record<string, unknown>)['thinking'] === 'boolean'
-  );
+  if (
+    typeof m['id'] !== 'string' ||
+    typeof m['apiModel'] !== 'string' ||
+    typeof m['name'] !== 'string' ||
+    typeof m['family'] !== 'string' ||
+    typeof m['version'] !== 'string' ||
+    typeof m['maxInputTokens'] !== 'number' ||
+    typeof m['maxOutputTokens'] !== 'number' ||
+    !m['capabilities'] ||
+    typeof (m['capabilities'] as Record<string, unknown>)['toolCalling'] !== 'boolean' ||
+    typeof (m['capabilities'] as Record<string, unknown>)['imageInput'] !== 'boolean'
+  ) {
+    return false;
+  }
+  if (m['choices'] !== undefined && !isValidReasoningChoices(m['choices'])) return false;
+  return true;
 }
 
-function loadCachedCatalog(context: vscode.ExtensionContext): ModelDefinition[] {
+function isValidDevCache(value: unknown): value is ModelsDevCache {
+  if (!value || typeof value !== 'object') return false;
+  const models = (value as Record<string, unknown>)['models'];
+  return !!models && typeof models === 'object';
+}
+
+function loadCachedState(context: vscode.ExtensionContext): {
+  models: ModelDefinition[];
+  devCache: ModelsDevCache | undefined;
+} {
   try {
-    const cached = context.globalState.get<{ savedAt?: unknown; models?: unknown }>(
+    const cached = context.globalState.get<{ devCache?: unknown; models?: unknown }>(
       MODEL_CATALOG_CACHE_KEY,
     );
-    if (cached && Array.isArray(cached.models)) {
-      const models = cached.models.filter(isValidModelDefinition);
-      if (models.length > 0) return models;
-    }
+    const models = Array.isArray(cached?.models)
+      ? cached.models.filter(isValidModelDefinition).map((m) => ({
+          ...m,
+          // Rebuild schemas deterministically so objects match fresh refreshes.
+          ...(m.choices ? { configurationSchema: buildConfigurationSchema(m.choices) } : {}),
+        }))
+      : [];
+    const devCache = isValidDevCache(cached?.devCache) ? cached.devCache : undefined;
+    return { models, devCache };
   } catch {
-    // Corrupt cache: fall through to known models.
+    // Corrupt cache: start empty; the startup refresh repopulates from live data.
+    return { models: [], devCache: undefined };
   }
-  return [...KNOWN_MODELS];
 }
 
 /**
@@ -425,7 +490,7 @@ function reportCopilotContextUsage(
     completion_tokens: usage.completion_tokens,
     total_tokens: usage.total_tokens,
     prompt_tokens_details: {
-      cached_tokens: usage.prompt_cache_hit_tokens ?? 0,
+      cached_tokens: usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? 0,
     },
   };
 
@@ -441,8 +506,17 @@ function reportCopilotContextUsage(
   }
 }
 
-function withApiKey(info: ModelPickerChatInformation, apiKey: string): ModelWithApiKey {
-  return { ...info, isBYOK: true, apiKey };
+function withApiKey(
+  info: ModelPickerChatInformation,
+  model: ModelDefinition,
+  apiKey: string,
+): ModelWithApiKey {
+  return {
+    ...info,
+    isBYOK: true,
+    maxContextWindowTokens: model.maxInputTokens + model.maxOutputTokens,
+    apiKey,
+  };
 }
 
 function toChatInfo(m: ModelDefinition): ModelPickerChatInformation {
@@ -459,6 +533,6 @@ function toChatInfo(m: ModelDefinition): ModelPickerChatInformation {
       toolCalling: m.capabilities.toolCalling,
       imageInput: m.capabilities.imageInput,
     },
-    ...(m.capabilities.thinking ? { configurationSchema: MODEL_CONFIGURATION_SCHEMA } : {}),
+    ...(m.configurationSchema ? { configurationSchema: m.configurationSchema } : {}),
   };
 }

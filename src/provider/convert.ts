@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { DeepSeekMessage, DeepSeekTool, DeepSeekToolCall } from '../deepseekClient.js';
 import { readReasoningMarker } from './replay.js';
-import type { ModelConfigurationOptions, TemperaturePreset, ThinkingEffort } from './schema.js';
+import type { ModelConfigurationOptions, TemperaturePreset } from './schema.js';
 import { TEMPERATURE_PRESET_VALUES } from './schema.js';
 
 function extractTextFromParts(parts: readonly unknown[]): string {
@@ -14,13 +14,9 @@ function extractTextFromParts(parts: readonly unknown[]): string {
   return text;
 }
 
-export function getMessageText(message: vscode.LanguageModelChatRequestMessage): string {
-  return extractTextFromParts(message.content);
-}
-
 export function convertMessages(
   messages: readonly vscode.LanguageModelChatRequestMessage[],
-  isThinkingModel: boolean,
+  includeReasoning: boolean,
 ): DeepSeekMessage[] {
   const result: DeepSeekMessage[] = [];
 
@@ -49,9 +45,10 @@ export function convertMessages(
     }
 
     if (role === 'assistant') {
-      const reasoningContent = readReasoningMarker(message) ?? '';
+      // The thinking-disabled path must not send reasoning replay content.
+      const reasoningContent = includeReasoning ? (readReasoningMarker(message) ?? '') : '';
 
-      if (content || toolCalls.length > 0 || isThinkingModel) {
+      if (content || toolCalls.length > 0 || reasoningContent) {
         const msg: DeepSeekMessage = {
           role: 'assistant' as const,
           content: content || '',
@@ -59,7 +56,7 @@ export function convertMessages(
         if (toolCalls.length > 0) {
           msg.tool_calls = toolCalls;
         }
-        if (isThinkingModel) {
+        if (reasoningContent) {
           msg.reasoning_content = reasoningContent;
         }
         result.push(msg);
@@ -114,21 +111,29 @@ export function convertTools(
     );
 }
 
-export function countMessageChars(messages: DeepSeekMessage[]): number {
-  let total = 0;
-  for (const msg of messages) {
-    total += msg.content.length;
-    if (msg.reasoning_content) total += msg.reasoning_content.length;
-  }
-  return total;
+/**
+ * Image bytes carry no per-character token information, so they are blanked
+ * before measuring: data URLs and long embedded base64 payloads.
+ */
+function stripImageData(json: string): string {
+  return json
+    .replace(/data:[A-Za-z0-9/+.=-]+;[A-Za-z0-9;=+.~:/-]*base64,[A-Za-z0-9+/=]+/g, '')
+    .replace(/"(base64|image_url|url)"\s*:\s*"[A-Za-z0-9+/=\s]{256,}"/g, '"$1":""');
 }
 
-export function getConfiguredThinkingEffort(options: ModelConfigurationOptions): ThinkingEffort {
-  const configuredEffort =
-    options.modelConfiguration?.reasoningEffort ?? options.configuration?.reasoningEffort;
-  if (configuredEffort === 'none') return 'none';
-  if (configuredEffort === 'max') return 'max';
-  return 'high';
+/** Full request payload (messages AND tools) with image data removed. */
+export function countRequestChars(
+  messages: readonly DeepSeekMessage[],
+  tools: readonly DeepSeekTool[] | undefined,
+): number {
+  return stripImageData(JSON.stringify({ messages, tools: tools ?? [] })).length;
+}
+
+/** Provider-converted form of one message (replay included) with image data removed. */
+export function countConvertedMessageChars(
+  message: vscode.LanguageModelChatRequestMessage,
+): number {
+  return stripImageData(JSON.stringify(convertMessages([message], true))).length;
 }
 
 export function getConfiguredTemperature(options: ModelConfigurationOptions): number {

@@ -78,6 +78,8 @@ export class AuthManager {
   }
 
   getBaseUrl(): string {
-    return this.baseUrl;
+    return (
+      vscode.workspace.getConfiguration('deepseek').get<string>('baseUrl') || this.baseUrl
+    );
   }
 }

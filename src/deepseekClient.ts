@@ -34,7 +34,7 @@ export interface DeepSeekRequest {
   thinking?: {
     type: 'enabled' | 'disabled';
   };
-  reasoning_effort?: 'high' | 'max';
+  reasoning_effort?: string;
   temperature?: number;
   top_p?: number;
   max_tokens?: number;
@@ -75,6 +75,9 @@ export interface DeepSeekUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+  };
   prompt_cache_hit_tokens?: number;
   prompt_cache_miss_tokens?: number;
 }
