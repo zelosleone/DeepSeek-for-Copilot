@@ -2,7 +2,7 @@
   "name": "copilot-vscode-deepseek",
   "displayName": "DeepSeek for Copilot",
   "description": "Use DeepSeek V4 models in VS Code Copilot Chat with thinking effort presets & temperature presets, plus DeepSeek FIM inline completion",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "type": "module",
   "publisher": "DenizhanDaklr",
   "repository": {
@@ -110,17 +110,7 @@
         "deepseek.inlineCompletion.enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Suggest inline code completions using DeepSeek FIM. Disable GitHub Copilot's own inline suggestions first, otherwise both providers compete for the same suggestions.",
-          "scope": "application"
-        },
-        "deepseek.inlineCompletion.model": {
-          "type": "string",
-          "default": "deepseek-v4-flash",
-          "enum": [
-            "deepseek-v4-flash",
-            "deepseek-v4-pro"
-          ],
-          "description": "Model used for inline completion. Flash is roughly 400ms faster per request.",
+          "description": "Suggest inline code completions using DeepSeek Flash (FIM). Disable GitHub Copilot's own inline suggestions first, otherwise both providers compete for the same suggestions.",
           "scope": "application"
         },
         "deepseek.inlineCompletion.debounceMs": {
@@ -134,7 +124,8 @@
           "type": "number",
           "default": 128,
           "minimum": 1,
-          "description": "Maximum tokens per inline completion.",
+          "maximum": 4096,
+          "description": "Maximum tokens per inline completion (DeepSeek's FIM limit is 4K).",
           "scope": "application"
         },
         "deepseek.inlineCompletion.maxLines": {
@@ -163,7 +154,7 @@
     "@typescript-eslint/eslint-plugin": "^8.67.0",
     "@typescript-eslint/parser": "^8.67.0",
     "@vscode/tree-sitter-wasm": "^0.3.1",
-    "@vscode/vsce": "^3.9.2",
+    "@vscode/vsce": "^4.0.0",
     "eslint": "9.39.2",
     "globals": "^17.9.0",
     "typescript": "5.9.3"

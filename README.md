@@ -1,88 +1,44 @@
 # DeepSeek for Copilot
 
-Use DeepSeek V4 models in Copilot Chat.
+Use DeepSeek models in GitHub Copilot Chat, plus optional inline code completions.
 
-## Setup
+1. Run **DeepSeek: Set API Key** and paste a key from [platform.deepseek.com](https://platform.deepseek.com), or add it under **Manage Models** in the Copilot Chat model picker.
+2. Pick a DeepSeek model in the model picker.
+3. Set reasoning effort and temperature right in the picker.
 
-1. Install the extension.
-2. `Ctrl+Shift+P` → **DeepSeek: Set API Key** → enter your key from [platform.deepseek.com](https://platform.deepseek.com).
-3. Open Copilot Chat, pick a DeepSeek model. Chat.
+Models, context windows and effort levels come live from DeepSeek's API, with [models.dev](https://models.dev) filling any gaps, so new models show up without an update. Copilot's context window indicator works as usual.
 
-## Model Picker
+## Model picker
 
-Each model has a gear icon with two dropdowns:
+| Option | Values |
+|---|---|
+| Reasoning Effort | Live per model, currently Off, Low, High and Max. Starts at DeepSeek's own default. |
+| Temperature | Balanced (1.0), Precise (0.2), Creative (1.3), Max (1.5) or Custom |
 
-| Setting | Options | Default |
+## Inline completion
+
+Off by default. Run **DeepSeek: Toggle Inline Completion**, and turn off Copilot's own inline suggestions (`github.copilot.enable`) so the two don't compete.
+
+Suggestions come from DeepSeek Flash. A tree-sitter parse trims them at the end of the block they started in, or after one statement when they start new ones. Grammars ship for TypeScript, JavaScript, Python, Go, Rust, Java, C#, C/C++, Ruby, PHP, shell, PowerShell, CSS and INI; other languages are only capped by `maxLines`.
+
+## Settings
+
+| Setting | Default | Notes |
 |---|---|---|
-| Thinking Effort | None, High, Max | High |
-| Temperature | Balanced (1.0), Precise (0.2), Creative (1.3), Max (1.5) | Balanced |
-
-No global settings needed, everything lives in the picker.
-
-## Inline Completion
-
-DeepSeek FIM suggestions as you type. Off by default.
-
-`Ctrl+Shift+P` → **DeepSeek: Toggle Inline Completion**.
-
-| Setting | Options | Default |
-|---|---|---|
-| `deepseek.inlineCompletion.enabled` | on, off | off |
-| `deepseek.inlineCompletion.model` | `deepseek-v4-flash`, `deepseek-v4-pro` | flash |
-| `deepseek.inlineCompletion.debounceMs` | idle time before a request | 300 |
-| `deepseek.inlineCompletion.maxTokens` | tokens per suggestion | 128 |
-| `deepseek.inlineCompletion.maxLines` | lines per suggestion | 10 |
-
-Suggestions are cut where they leave the block they started in, using a tree-sitter
-parse rather than a guess. Grammars ship for:
-
-`typescript` `typescriptreact` `javascript` `javascriptreact` `python` `go` `rust`
-`java` `csharp` `cpp` `c` `cuda-cpp` `ruby` `php` `shellscript` `powershell` `css`
-`ini` `properties`
-
-Other languages still get suggestions, just no block trimming, bounded only by
-`maxLines`. Suggestions are also re-indented to match the editor's tabs/spaces.
-
-Turn off Copilot's own inline suggestions first (`github.copilot.enable`), otherwise
-both providers compete for the same ghost text.
-
-If suggestions look untrimmed, check **DeepSeek: Show Logs** for a tree-sitter
-warning.
+| `deepseek.baseUrl` | `https://api.deepseek.com` | API base URL |
+| `deepseek.temperature` | `1` | Used when the picker's temperature is Custom |
+| `deepseek.apiKey` | empty | Plain-text fallback; **Set API Key** stores the key securely instead |
+| `deepseek.inlineCompletion.enabled` | `false` | Inline completion on or off |
+| `deepseek.inlineCompletion.debounceMs` | `300` | Idle time before a request is sent |
+| `deepseek.inlineCompletion.maxTokens` | `128` | Tokens per suggestion, up to 4096 |
+| `deepseek.inlineCompletion.maxLines` | `10` | Lines per suggestion |
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `DeepSeek: Set API Key` | Store API key |
-| `DeepSeek: Clear API Key` | Remove stored key |
-| `DeepSeek: Set Temperature` | Pick a temperature preset or custom value |
-| `DeepSeek: Toggle Inline Completion` | Turn FIM suggestions on or off |
-| `DeepSeek: Open Settings` | Jump to the DeepSeek settings |
-| `DeepSeek: Show Logs` | Open output channel (token counts, cache hit rate) |
+All under **DeepSeek:** in the Command Palette: Set API Key, Clear API Key, Set Temperature, Toggle Inline Completion, Open Settings, and Show Logs (token counts and cache hit rate).
 
 ## Builds
 
-Releases attach two files:
+Install from the Marketplace or a release `.vsix`. Releases also attach a `-nes.vsix` with proposed inline-completion APIs for sideloading; it needs `{ "enable-proposed-api": ["DenizhanDaklr.copilot-vscode-deepseek"] }` in `~/.vscode/argv.json`. Build locally with `npm run package` or `npm run package:proposed`.
 
-| File | Use |
-|---|---|
-| `copilot-vscode-deepseek-<version>.vsix` | Install this one. |
-| `...-nes.vsix` | Enables proposed APIs (`inlineCompletionsAdditions`). Sideload only, never published to the Marketplace. |
-
-The `-nes` build also needs this in `~/.vscode/argv.json`, which survives restarts:
-
-```json
-{ "enable-proposed-api": ["DenizhanDaklr.copilot-vscode-deepseek"] }
-```
-
-Build locally with `npm run package` and `npm run package:proposed`.
-
-## Requirements
-
-- VS Code 1.125+
-- GitHub Copilot subscription
-- DeepSeek API key
-
-## License
-
-MIT
+Requires VS Code 1.125+ and GitHub Copilot Chat. MIT license.

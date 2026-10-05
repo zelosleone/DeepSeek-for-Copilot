@@ -9,6 +9,9 @@ import { trimToBlockWithTreeSitter } from './treeSitter.js';
  */
 const FIM_PATH = '/beta/completions';
 
+/** FIM runs on Flash, the model DeepSeek's FIM guide uses. */
+const FIM_MODEL = 'deepseek-flash';
+
 const MAX_PREFIX_CHARS = 4000;
 const MAX_SUFFIX_CHARS = 1000;
 
@@ -157,7 +160,6 @@ export class DeepSeekInlineCompletionProvider implements vscode.InlineCompletion
 
     const completion = await this.fetchCompletion(
       apiKey,
-      config.get<string>('inlineCompletion.model', 'deepseek-v4-flash'),
       config.get<number>('inlineCompletion.maxTokens', 128),
       prefix,
       suffix,
@@ -210,7 +212,6 @@ export class DeepSeekInlineCompletionProvider implements vscode.InlineCompletion
 
   private async fetchCompletion(
     apiKey: string,
-    model: string,
     maxTokens: number,
     prefix: string,
     suffix: string,
@@ -227,7 +228,7 @@ export class DeepSeekInlineCompletionProvider implements vscode.InlineCompletion
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model,
+          model: FIM_MODEL,
           prompt: prefix,
           suffix,
           max_tokens: maxTokens,

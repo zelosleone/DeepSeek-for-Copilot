@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AuthManager, setProviderConfiguredApiKey } from '../auth.js';
+import { AuthManager, getProviderConfiguredApiKey, setProviderConfiguredApiKey } from '../auth.js';
 import { DeepSeekClient, type DeepSeekToolCall, type DeepSeekUsage } from '../deepseekClient.js';
 import { logger } from '../logger.js';
 import {
@@ -80,6 +80,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
   private readonly extensionContext: vscode.ExtensionContext;
   private availableModels: ModelDefinition[];
   private devCache: ModelsDevCache | undefined;
+  private refreshKey: string | undefined;
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
   private disposed = false;
 
@@ -129,7 +130,8 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
   async refreshModels(): Promise<void> {
     if (this.disposed) return;
-    const apiKey = await this.authManager.getApiKey();
+    // The key VS Code hands the provider (Add Models) first, so it works without a stored secret.
+    const apiKey = getProviderConfiguredApiKey() ?? (await this.authManager.getApiKey());
     if (!apiKey) return;
     try {
       const baseUrl = this.authManager.getBaseUrl().replace(/\/+$/, '');
@@ -256,14 +258,23 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
       if (!(await this.authManager.promptForApiKey())) return [];
       apiKey = await this.authManager.getApiKey();
       if (!apiKey) return [];
-      void this.refreshModels();
     }
 
     // Inline completion is not a chat provider, so VS Code never hands it the
     // configured key. Share it rather than persisting a second copy.
     setProviderConfiguredApiKey(apiKey);
+    await this.syncCatalog(apiKey);
 
-    return this.availableModels.map((model) => withApiKey(toChatInfo(model), model, apiKey));
+    const key = apiKey;
+    return this.availableModels.map((model) => withApiKey(toChatInfo(model), model, key));
+  }
+
+  /** Refresh with the key in use; with no catalog yet (first run), wait so the picker is not empty. */
+  private async syncCatalog(apiKey: string): Promise<void> {
+    if (apiKey === this.refreshKey && this.availableModels.length > 0) return;
+    this.refreshKey = apiKey;
+    const refresh = this.refreshModels();
+    if (this.availableModels.length === 0) await refresh;
   }
 
   async provideLanguageModelChatResponse(
