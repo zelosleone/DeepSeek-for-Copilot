@@ -14,8 +14,11 @@ import {
 import { captureShape, describeShapeChange, type PrefixShape } from './cacheShape.js';
 import { createReasoningMarkerPart } from './replay.js';
 import {
+  KNOWN_MODELS,
+  MODEL_CATALOG_CACHE_KEY,
   MODEL_CONFIGURATION_SCHEMA,
-  MODELS,
+  parseModelListResponse,
+  resolveModelCatalog,
   type ModelConfigurationOptions,
   type ModelDefinition,
   type ModelPickerChatInformation,
@@ -60,10 +63,21 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
   private charsPerToken = 4.0;
   private lastPrefixShape: PrefixShape | undefined;
+  private readonly extensionContext: vscode.ExtensionContext;
+  private availableModels: ModelDefinition[];
+  private refreshTimer: ReturnType<typeof setInterval> | undefined;
+  private disposed = false;
 
   constructor(context: vscode.ExtensionContext, onUsage?: (info: SessionUsageInfo) => void) {
     this.authManager = new AuthManager(context);
     this.onUsage = onUsage;
+    this.extensionContext = context;
+    this.availableModels = loadCachedCatalog(context);
+    void this.refreshModels();
+    this.refreshTimer = setInterval(() => {
+      void this.refreshModels();
+    }, 30 * 60 * 1000);
+    if (typeof this.refreshTimer.unref === 'function') this.refreshTimer.unref();
 
     // Reasoning used to live in a provider-global map persisted here, which leaked
     // between chat sessions (#10). It now travels with the conversation instead.
@@ -84,9 +98,49 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     );
   }
 
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
+    this.onDidChangeLanguageModelChatInformationEmitter.dispose();
+  }
+
+  async refreshModels(): Promise<void> {
+    if (this.disposed) return;
+    const apiKey = await this.authManager.getApiKey();
+    if (!apiKey) return;
+    try {
+      const baseUrl = this.authManager.getBaseUrl().replace(/\/+$/, '');
+      const response = await fetch(`${baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!response.ok) return;
+      const body: unknown = await response.json();
+      const merged = resolveModelCatalog(parseModelListResponse(body));
+      const previousIds = this.availableModels.map((m) => m.id).join('\n');
+      const nextIds = merged.map((m) => m.id).join('\n');
+      this.availableModels = merged;
+      await this.extensionContext.globalState.update(MODEL_CATALOG_CACHE_KEY, {
+        savedAt: Date.now(),
+        models: merged,
+      });
+      if (previousIds !== nextIds) {
+        this.onDidChangeLanguageModelChatInformationEmitter.fire();
+      }
+    } catch {
+      // Offline or transient failure: keep serving the cached catalog.
+    }
+  }
+
   async configureApiKey(): Promise<void> {
     const saved = await this.authManager.promptForApiKey();
-    if (saved) this.onDidChangeLanguageModelChatInformationEmitter.fire();
+    if (saved) {
+      void this.refreshModels();
+      this.onDidChangeLanguageModelChatInformationEmitter.fire();
+    }
   }
 
   async clearApiKey(): Promise<void> {
@@ -164,13 +218,14 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
       if (!(await this.authManager.promptForApiKey())) return [];
       apiKey = await this.authManager.getApiKey();
       if (!apiKey) return [];
+      void this.refreshModels();
     }
 
     // Inline completion is not a chat provider, so VS Code never hands it the
     // configured key. Share it rather than persisting a second copy.
     setProviderConfiguredApiKey(apiKey);
 
-    return MODELS.map((model) => withApiKey(toChatInfo(model), apiKey));
+    return this.availableModels.map((model) => withApiKey(toChatInfo(model), apiKey));
   }
 
   async provideLanguageModelChatResponse(
@@ -192,7 +247,7 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
     const baseUrl = this.authManager.getBaseUrl();
     const client = new DeepSeekClient(baseUrl, apiKey);
 
-    const modelDef = MODELS.find((m) => m.id === modelInfo.id);
+    const modelDef = this.availableModels.find((m) => m.id === modelInfo.id);
     if (!modelDef) throw new Error(`Unknown DeepSeek model: ${modelInfo.id}`);
 
     const isThinkingModel = modelDef.capabilities.thinking;
@@ -319,6 +374,39 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
 
     return Math.max(1, Math.ceil(getMessageText(text).length / this.charsPerToken));
   }
+}
+
+function isValidModelDefinition(value: unknown): value is ModelDefinition {
+  if (!value || typeof value !== 'object') return false;
+  const m = value as Record<string, unknown>;
+  return (
+    typeof m['id'] === 'string' &&
+    typeof m['apiModel'] === 'string' &&
+    typeof m['name'] === 'string' &&
+    typeof m['family'] === 'string' &&
+    typeof m['version'] === 'string' &&
+    typeof m['maxInputTokens'] === 'number' &&
+    typeof m['maxOutputTokens'] === 'number' &&
+    !!m['capabilities'] &&
+    typeof (m['capabilities'] as Record<string, unknown>)['toolCalling'] === 'boolean' &&
+    typeof (m['capabilities'] as Record<string, unknown>)['imageInput'] === 'boolean' &&
+    typeof (m['capabilities'] as Record<string, unknown>)['thinking'] === 'boolean'
+  );
+}
+
+function loadCachedCatalog(context: vscode.ExtensionContext): ModelDefinition[] {
+  try {
+    const cached = context.globalState.get<{ savedAt?: unknown; models?: unknown }>(
+      MODEL_CATALOG_CACHE_KEY,
+    );
+    if (cached && Array.isArray(cached.models)) {
+      const models = cached.models.filter(isValidModelDefinition);
+      if (models.length > 0) return models;
+    }
+  } catch {
+    // Corrupt cache: fall through to known models.
+  }
+  return [...KNOWN_MODELS];
 }
 
 /**

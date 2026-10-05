@@ -32,7 +32,6 @@ export function activate(context: vscode.ExtensionContext) {
   function onTabOrEditorChange(): void {
     if (!usageStatusBarItem) return;
 
-    lastVisibleGenerationId = Infinity;
     usageStatusBarItem.hide();
   }
 
@@ -43,12 +42,14 @@ export function activate(context: vscode.ExtensionContext) {
     const provider = new DeepSeekChatProvider(context, (info: SessionUsageInfo) => {
       if (!usageStatusBarItem) return;
 
-      if (info.generationId > lastVisibleGenerationId) {
+      if (info.generationId >= lastVisibleGenerationId) {
+        lastVisibleGenerationId = info.generationId;
         updateStatusBar(usageStatusBarItem, info);
       }
     });
 
     context.subscriptions.push(
+      provider,
       usageStatusBarItem,
       vscode.window.tabGroups.onDidChangeTabs(onTabOrEditorChange),
       vscode.window.onDidChangeActiveTextEditor(onTabOrEditorChange),
