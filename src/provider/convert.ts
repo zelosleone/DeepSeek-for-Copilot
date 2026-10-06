@@ -4,6 +4,9 @@ import { readReasoningMarker } from './replay.js';
 import type { ModelConfigurationOptions, TemperaturePreset } from './schema.js';
 import { TEMPERATURE_PRESET_VALUES } from './schema.js';
 
+// Copilot sends its system prompt with the proposed System role, which the stable typings lack.
+const SYSTEM_ROLE = 3 as vscode.LanguageModelChatMessageRole;
+
 function extractTextFromParts(parts: readonly unknown[]): string {
   let text = '';
   for (const part of parts) {
@@ -62,7 +65,7 @@ export function convertMessages(
         result.push(msg);
       }
     } else if (content) {
-      result.push({ role: role as 'user' | 'assistant', content });
+      result.push({ role, content });
     }
 
     for (const tr of toolResults) {
@@ -73,12 +76,12 @@ export function convertMessages(
   return result;
 }
 
-function mapRole(role: vscode.LanguageModelChatMessageRole): 'user' | 'assistant' {
+function mapRole(role: vscode.LanguageModelChatMessageRole): 'system' | 'user' | 'assistant' {
   switch (role) {
-    case vscode.LanguageModelChatMessageRole.User:
-      return 'user';
     case vscode.LanguageModelChatMessageRole.Assistant:
       return 'assistant';
+    case SYSTEM_ROLE:
+      return 'system';
     default:
       return 'user';
   }
