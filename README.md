@@ -6,7 +6,7 @@ Use DeepSeek models in GitHub Copilot Chat, plus optional inline code completion
 2. Pick a DeepSeek model in the model picker.
 3. Set reasoning effort and temperature right in the picker.
 
-Models, context windows and effort levels come live from DeepSeek's API, with [models.dev](https://models.dev) filling any gaps, so new models show up without an update. Copilot's context window indicator works as usual.
+Models, context windows and effort levels come live from DeepSeek's API, with [models.dev](https://models.dev) filling any gaps, so new models show up without an update. Brand-new models appear right away with safe default limits until models.dev lists them. Copilot's context window indicator works as usual.
 
 ## Model picker
 

@@ -156,27 +156,27 @@ function includesImage(modalities: readonly string[] | undefined): boolean | und
   return modalities.some((m) => m.toLowerCase() === 'image');
 }
 
+/** Conservative fallback when DeepSeek lists a model before models.dev catalogs it. */
+const DEFAULT_CONTEXT_TOKENS = 131072;
+const DEFAULT_OUTPUT_TOKENS = 32768;
+
 /**
- * A live id becomes a model only when a context window and an output limit are
- * known: the provider's own /models fields first, models.dev second. Ids with
- * neither are skipped, never invented.
+ * A live id becomes a model with the provider's own /models fields first,
+ * models.dev second, and conservative defaults last.
  */
 export function resolveModelDefinition(
   live: LiveModelEntry,
   dev: ModelsDevModel | null | undefined,
 ): ModelDefinition | undefined {
+  // A model DeepSeek lists before models.dev catalogs it still shows up, with safe limits, corrected on the next refresh once models.dev knows it.
   const context =
     positiveNumberOrUndefined(live.context_window) ??
-    positiveNumberOrUndefined(dev?.limit?.context);
+    positiveNumberOrUndefined(dev?.limit?.context) ??
+    DEFAULT_CONTEXT_TOKENS;
   const output =
     positiveNumberOrUndefined(live.max_output_tokens) ??
-    positiveNumberOrUndefined(dev?.limit?.output);
-  if (context === undefined || output === undefined) {
-    logger.warn(
-      `Skipping DeepSeek model ${live.id}: no context/output limit from live or models.dev data`,
-    );
-    return undefined;
-  }
+    positiveNumberOrUndefined(dev?.limit?.output) ??
+    DEFAULT_OUTPUT_TOKENS;
   const limits = tokenLimits(context, output);
   const choices = reasoningChoices(
     dev?.reasoning_options,
@@ -221,11 +221,24 @@ export function resolveModelCatalog(
 ): ModelDefinition[] {
   const seen = new Set<string>();
   const catalog: ModelDefinition[] = [];
+  const defaulted: string[] = [];
   for (const entry of entries) {
     if (!entry.id || seen.has(entry.id) || !isChatModelId(entry.id)) continue;
     seen.add(entry.id);
-    const definition = resolveModelDefinition(entry, devCache?.models[entry.id]);
+    const dev = devCache?.models[entry.id];
+    if (
+      (positiveNumberOrUndefined(entry.context_window) ??
+        positiveNumberOrUndefined(dev?.limit?.context)) === undefined ||
+      (positiveNumberOrUndefined(entry.max_output_tokens) ??
+        positiveNumberOrUndefined(dev?.limit?.output)) === undefined
+    ) {
+      defaulted.push(entry.id);
+    }
+    const definition = resolveModelDefinition(entry, dev);
     if (definition) catalog.push(definition);
+  }
+  if (defaulted.length > 0) {
+    logger.info(`DeepSeek models using default limits: ${defaulted.join(', ')}`);
   }
   return catalog;
 }
