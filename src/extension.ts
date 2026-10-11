@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { AuthManager } from './auth.js';
 import { DeepSeekInlineCompletionProvider } from './fim.js';
 import { logger } from './logger.js';
+import { scheduleLodestarNotice } from './lodestar.js';
 import { DeepSeekChatProvider, type SessionUsageInfo } from './provider/index.js';
 
 function updateStatusBar(item: vscode.StatusBarItem, usage: SessionUsageInfo | undefined): void {
@@ -77,6 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
       ),
     );
 
+    scheduleLodestarNotice(context);
     logger.info('Extension activated');
   } catch (error) {
     usageStatusBarItem?.dispose();
