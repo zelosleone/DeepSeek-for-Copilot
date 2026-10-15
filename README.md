@@ -2,7 +2,7 @@
 
 Use DeepSeek models in GitHub Copilot Chat, plus optional inline code completions.
 
-> Also from the same developer: [Lodestar](https://marketplace.visualstudio.com/items?itemName=DenizhanDaklr.lodestar) walks you through how code works and reviews your changes, on any model in VS Code, including this extension's. $10, one time.
+> Also from the same developer: [Lodestar](https://marketplace.visualstudio.com/items?itemName=DenizhanDaklr.lodestar) walks you through how code works, explains anything you hover, and reviews your changes on any model in VS Code, including this extension's. 3 free runs included, then $5 one-time.
 
 1. Run **DeepSeek: Set API Key** and paste a key from [platform.deepseek.com](https://platform.deepseek.com), or add it under **Manage Models** in the Copilot Chat model picker.
 2. Pick a DeepSeek model in the model picker.
