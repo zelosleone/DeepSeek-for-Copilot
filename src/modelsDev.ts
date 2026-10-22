@@ -19,12 +19,15 @@ export interface ModelsDevModel {
   reasoning_options?: ReasoningOption[];
   modalities?: { input?: string[]; output?: string[] };
   limit?: { context?: number; output?: number };
+  release_date?: string;
 }
 
 export interface ModelsDevCache {
   etag?: string;
   /** Per model id: its metadata, or null when models.dev has none. */
   models: Record<string, ModelsDevModel | null>;
+  /** Models models.dev lists for this API that its own /models doesn't list yet, newest first. */
+  extra?: string[];
 }
 
 export interface ReasoningChoices {
@@ -63,7 +66,40 @@ export async function resolveModelsDev(
   const catalog = (await res.json()) as ModelsDevCatalog;
   const models: Record<string, ModelsDevModel | null> = {};
   for (const id of ids) models[id] = trim(findModel(catalog, baseUrl, id));
-  return { etag: res.headers.get('etag') ?? undefined, models };
+  const extra = newerThanListed(catalog, baseUrl, ids);
+  for (const model of extra) models[model.id] = trim(model);
+  return { etag: res.headers.get('etag') ?? undefined, models, extra: extra.map((model) => model.id) };
+}
+
+/**
+ * A provider can serve a new model before its /models lists it (MiniMax's M3.1 Flash did). The models models.dev
+ * lists for this same API that are newer than anything /models returns are offered too; a preview is left out once
+ * its release is there. Nothing here names a model: both lists are read live.
+ */
+export function newerThanListed(catalog: ModelsDevCatalog, baseUrl: string, ids: readonly string[]): ModelsDevModel[] {
+  const own = sameApi(catalog, baseUrl);
+  const listed = new Set(ids);
+  const newest = own.filter((model) => listed.has(model.id)).map((model) => model.release_date ?? '').sort().at(-1);
+  if (!newest) return [];
+  const all = new Set(own.map((model) => model.id));
+  const fresh = own.filter((model) => !listed.has(model.id) && (model.release_date ?? '') > newest && writesText(model));
+  const kept = fresh.filter((model) => !isPreviewOf(model.id, all));
+  return [...new Map(kept.map((model) => [model.id, model])).values()].sort((a, b) => (b.release_date ?? '').localeCompare(a.release_date ?? ''));
+}
+
+const writesText = (model: ModelsDevModel): boolean => !model.modalities?.output || model.modalities.output.includes('text');
+
+function isPreviewOf(id: string, all: Set<string>): boolean {
+  const release = id.replace(/[-_.]?preview(?:[-_.]?\d+)?$/i, '');
+  return release !== id && all.has(release);
+}
+
+/** The models of the providers whose API is ours: the exact URL, else the same host. */
+function sameApi(catalog: ModelsDevCatalog, baseUrl: string): ModelsDevModel[] {
+  const providers = Object.values(catalog).filter((provider) => provider.api !== undefined);
+  const exact = providers.filter((provider) => normalizeUrl(provider.api!) === normalizeUrl(baseUrl));
+  const chosen = exact.length ? exact : providers.filter((provider) => hostOf(provider.api!) === hostOf(baseUrl));
+  return chosen.flatMap((provider) => Object.entries(provider.models ?? {}).map(([id, model]) => ({ ...model, id })));
 }
 
 /** Copilot's own BYOK convention: the prompt budget is the window minus the output reservation. */
@@ -157,6 +193,6 @@ function findModel(catalog: ModelsDevCatalog, baseUrl: string, id: string): Mode
 
 function trim(model: ModelsDevModel | undefined): ModelsDevModel | null {
   if (!model) return null;
-  const { id, name, tool_call, reasoning_options, modalities, limit } = model;
-  return { id, name, tool_call, reasoning_options, modalities, limit };
+  const { id, name, tool_call, reasoning_options, modalities, limit, release_date } = model;
+  return { id, name, tool_call, reasoning_options, modalities, limit, release_date };
 }

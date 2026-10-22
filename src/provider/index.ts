@@ -139,7 +139,10 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(20_000),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        logger.warn(`Model list not refreshed: HTTP ${response.status}`);
+        return;
+      }
       const body: unknown = await response.json();
       const entries = parseModelListResponse(body);
       let devCache: ModelsDevCache;
@@ -149,11 +152,13 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
           entries.map((e) => e.id),
           this.devCache,
         );
-      } catch {
+      } catch (error) {
         // models.dev unreachable: keep the previous catalog, do not invent data.
+        logger.warn('models.dev not reached, model list kept', error);
         return;
       }
-      const merged = resolveModelCatalog(entries, devCache);
+      // Newer models DeepSeek serves before its /models lists them come first, as the newest.
+      const merged = resolveModelCatalog([...(devCache.extra ?? []).map((id) => ({ id })), ...entries], devCache);
       this.devCache = devCache;
       if (JSON.stringify(merged) === JSON.stringify(this.availableModels)) {
         // Nothing changed: persist the revalidated devCache but keep serving the
@@ -170,8 +175,9 @@ export class DeepSeekChatProvider implements vscode.LanguageModelChatProvider {
         models: merged,
       });
       this.onDidChangeLanguageModelChatInformationEmitter.fire();
-    } catch {
+    } catch (error) {
       // Offline or transient failure: keep serving the cached catalog.
+      logger.warn('Model list not refreshed', error);
     }
   }
 
